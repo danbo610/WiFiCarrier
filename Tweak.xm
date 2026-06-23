@@ -495,7 +495,17 @@ static void loadPrefs() {
 	customWiFiCalling1 = ( [prefs objectForKey:@"wifiCalling1"] ? [[prefs objectForKey:@"wifiCalling1"] stringValue] : nil );
 	customWiFiCalling2 = ( [prefs objectForKey:@"wifiCalling2"] ? [[prefs objectForKey:@"wifiCalling2"] stringValue] : nil );
 
-	gestureType = ( [prefs objectForKey:@"gestureType"] ? [prefs objectForKey:@"gestureType"] : @"both" );
+	// gestureType is stored as a string ("longpress"/"doubletap"/"both"); accept a
+	// numeric index too in case the segmented cell ever stores one.
+	id gt = [prefs objectForKey:@"gestureType"];
+	if ([gt isKindOfClass:[NSString class]] && [(NSString *)gt length] > 0) {
+		gestureType = gt;
+	} else if ([gt isKindOfClass:[NSNumber class]]) {
+		int gi = [gt intValue];
+		gestureType = (gi == 0) ? @"longpress" : (gi == 1) ? @"doubletap" : @"both";
+	} else {
+		gestureType = @"both";
+	}
 	publicIPURL = ( ([prefs objectForKey:@"publicIPURL"] && [[prefs objectForKey:@"publicIPURL"] length] > 0) ? [prefs objectForKey:@"publicIPURL"] : @"https://icanhazip.com/" );
 
 	Debug([NSString stringWithFormat: @"enabled: %@", enabled ? @"YES" : @"NO"]);

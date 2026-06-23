@@ -13,17 +13,13 @@ MFMailComposeViewController *mMFComposer;
 - (NSArray *)specifiers {
 	if (!_specifiers) {
 		NSMutableArray *specifiers = [[self loadSpecifiersFromPlistName:@"Root" target:self] mutableCopy];
-		// Cache the Public IP URL field so we can show/hide it on demand.
-		for (PSSpecifier *specifier in specifiers) {
-			if ([[specifier propertyForKey:@"id"] isEqualToString:@"publicIPURL"]) {
-				[_urlSpecifier release];
-				_urlSpecifier = [specifier retain];
-				break;
+		// Only show the Public IP URL field when Public IP is enabled.
+		if (![self publicIPEnabled]) {
+			PSSpecifier *urlSpec = nil;
+			for (PSSpecifier *s in specifiers) {
+				if ([[s propertyForKey:@"id"] isEqualToString:@"publicIPURL"]) { urlSpec = s; break; }
 			}
-		}
-		// Only show the URL field when Public IP is enabled.
-		if (![self publicIPEnabled] && _urlSpecifier) {
-			[specifiers removeObject:_urlSpecifier];
+			if (urlSpec) [specifiers removeObject:urlSpec];
 		}
 		_specifiers = specifiers;
 	}
@@ -50,15 +46,13 @@ MFMailComposeViewController *mMFComposer;
 	[settings setObject:value forKey:specifier.properties[@"key"]];
 	[settings writeToFile:path atomically:YES];
 
-	// Show/hide the Public IP URL field live when the Public IP switch is toggled.
-	if ([specifier.properties[@"key"] isEqualToString:@"enableExtIP"] && _urlSpecifier) {
-		BOOL on = [value boolValue];
-		BOOL present = ([self indexOfSpecifier:_urlSpecifier] != NSNotFound);
-		if (on && !present) {
-			[self insertSpecifier:_urlSpecifier afterSpecifier:specifier animated:YES];
-		} else if (!on && present) {
-			[self removeSpecifier:_urlSpecifier animated:YES];
-		}
+	// Show/hide the Public IP URL field when the Public IP switch is toggled.
+	// A full reload (vs. animated insert/remove) rebuilds the banner cell cleanly,
+	// avoiding the stale-layout glitch on the header.
+	if ([specifier.properties[@"key"] isEqualToString:@"enableExtIP"]) {
+		[_specifiers release];
+		_specifiers = nil;
+		[self reloadSpecifiers];
 	}
 
 	CFStringRef notificationName = (CFStringRef)specifier.properties[@"PostNotification"];

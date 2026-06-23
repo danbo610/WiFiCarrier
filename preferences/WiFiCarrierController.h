@@ -3,9 +3,7 @@
 #import <MessageUI/MessageUI.h>
 #import <MessageUI/MFMailComposeViewController.h>
 
-@interface WiFiCarrierController : PSListController <MFMailComposeViewControllerDelegate> {
-	PSSpecifier *_urlSpecifier;
-}
+@interface WiFiCarrierController : PSListController <MFMailComposeViewControllerDelegate>
 @end
 
 @interface WiFiCarrierLogo : PSTableCell {

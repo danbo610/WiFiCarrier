@@ -1,7 +1,7 @@
 Package: com.highrez.wificarrier
 Name: WiFiCarrier+
 Depends: ellekit
-Version: 1.0.6
+Version: 1.0.7
 Architecture: iphoneos-arm64
 Description: Show your WiFi SSID / IP address / custom carrier text in the status bar. Ported to iOS 16 with rootless + roothide support. Supports additions for WiFi Calling.
 Depiction: https://phil-highrez.github.io/repo/depictions/?p=com.highrez.wificarrier

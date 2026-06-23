@@ -1,3 +1,8 @@
+// Import explicitly: the deprecated Theos Prefix.pch no longer auto-imports
+// Foundation/UIKit when building against the iOS 14+ SDK, and this header is
+// #include'd before Tweak.xm's own imports. UIKit transitively pulls in
+// Foundation and CoreGraphics (NSObject, NSString, NSInteger, BOOL, UIView, etc.).
+#import <UIKit/UIKit.h>
 
 #define kWFCTapGesture 0xdeadbeef
 

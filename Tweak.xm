@@ -446,12 +446,15 @@ static void refreshPrefs2() {
 }
 
 static void initPrefs() {
-  // Copy the default preferences file when the actual preference file doesn't exist
-  NSString *path = @"/User/Library/Preferences/com.highrez.wificarrier.plist";
-  NSString *pathDefault = @"/Library/PreferenceBundles/WiFiCarrier.bundle/defaults.plist";
+  // Seed an empty preferences file on first run so loadPrefs takes its
+  // default-applying branch (enabled / SSID on out of the box). We write directly
+  // to the data-partition path rather than copying from the tweak bundle: the data
+  // path is identical on rootless and roothide (not relocated under /var/jb or the
+  // randomized jbroot), so this needs no scheme-specific path resolution.
+  NSString *path = @"/var/mobile/Library/Preferences/com.highrez.wificarrier.plist";
   NSFileManager *fileManager = [NSFileManager defaultManager];
   if (![fileManager fileExistsAtPath:path]) {
-    [fileManager copyItemAtPath:pathDefault toPath:path error:nil];
+    [@{} writeToFile:path atomically:YES];
   }
 }
 

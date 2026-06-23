@@ -5,6 +5,8 @@ It also allows you to customize the carrier (network operator) text in the iOS s
 This is updated to work on iOS 13 as the orriginal did not. 
 It should (from version 1.0.3) work on iOS 12 and perhaps older (it is currently untested on anything older than 12.4).
 
+**From version 1.0.5** the tweak is ported to **iOS 16** and ships as **rootless** and **roothide** packages (arm64/arm64e, `Depends: ellekit`). The core hooks were verified against a live iOS 16.3.1 device. Both `.deb` variants are built in the cloud by GitHub Actions (`.github/workflows/build.yml`) on every push — download them from the run's *Artifacts*. Install the matching variant for your jailbreak (roothide → `*_roothide.deb`, rootless e.g. Dopamine → `*_rootless.deb`).
+
 __Based on NoisyFlake's orriginal version with added functionality.__
 
 # 

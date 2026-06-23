@@ -1,0 +1,48 @@
+name: Build deb
+
+# Build on a native macOS runner so Apple's clang/linker produce ABI-correct
+# arm64e binaries. This tweak injects into SpringBoard (arm64e), which a Linux
+# cross-toolchain's arm64e slice could not satisfy.
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install ldid + dpkg
+        run: brew install ldid dpkg
+
+      - name: Clone Theos (vanilla + roothide forks)
+        run: |
+          git clone --quiet --recursive https://github.com/theos/theos "$HOME/theos"
+          git clone --quiet --recursive https://github.com/roothide/theos "$HOME/theos-roothide"
+
+      - name: Build rootless .deb (vanilla Theos)
+        run: |
+          export THEOS="$HOME/theos"
+          make clean || true
+          rm -rf packages
+          make package THEOS_PACKAGE_SCHEME=rootless FINALPACKAGE=1
+          mkdir -p out
+          cp packages/*.deb out/WiFiCarrier_1.0.5_rootless.deb
+
+      - name: Build roothide .deb (roothide Theos)
+        run: |
+          export THEOS="$HOME/theos-roothide"
+          make clean || true
+          rm -rf packages
+          make package THEOS_PACKAGE_SCHEME=roothide FINALPACKAGE=1
+          mkdir -p out
+          cp packages/*.deb out/WiFiCarrier_1.0.5_roothide.deb
+
+      - name: Upload both .deb artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: WiFiCarrier-debs
+          path: out/*.deb
+          if-no-files-found: error

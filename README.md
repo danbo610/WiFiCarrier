@@ -16,9 +16,12 @@ __Based on NoisyFlake's orriginal version with added functionality.__
 Enable the tweak generally - simply an on/off switch!
 
 #### Status Bar Gesture
-Turns on a gesture on the home screen status bar to cycle through enabled states by long pressing the status bar.
-So if you have SSID, IP Address and Custom Carrier enabled, a long press will cycle through each display state (including the orriginal carrier text).
-NOTE: On IOS 13 this gesture will work in apps with a status bar too (not on IOS 12).
+Turns on a gesture on the status bar to cycle the displayed text through a fixed sequence:
+**WiFi SSID → Public IP → Internal IP → Carrier (original)** and back to the start — regardless of which display options above are enabled. Each switch gives a short haptic tap and a brief on-screen toast naming the new mode.
+NOTE: On iOS 13+ (incl. iOS 16) this gesture also works inside apps with a status bar.
+
+#### Gesture Type
+Choose how the gesture is triggered: **Long Press**, **Double Tap**, or **Both** (default).
 
 #### Use WiFi SSID
 Replace the carrier text with the WiFi Network Name (orriginal purpose of this tweak) when connected to WiFi.
@@ -29,7 +32,10 @@ Replace the carrier text with your (internal) IP address on the WiFi network.
 #### Public IP
 Replace the carrier text with your public (exteral) IP address (WiFi/Cellular/VPN). 
 
-**NOTE: A tiny data request is made to https://icanhazip.com/ to get this.**
+**NOTE: A tiny data request is made to the URL below (default https://icanhazip.com/) to get this.**
+
+#### URL (Public IP)
+Shown only while Public IP is enabled. The endpoint queried for your public IP — it must return your IP as plain text. Defaults to `https://icanhazip.com/`; you can point it at any equivalent service (e.g. `https://api.ipify.org`) or your own.
 
 
 ### Custom Carrier

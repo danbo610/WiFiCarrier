@@ -29,6 +29,26 @@
 			<key>PostNotification</key> 		<string>com.highrez.wificarrier/prefsupdated</string>
 		</dict>
 		<dict>
+			<key>cell</key>						<string>PSLinkListCell</string>
+			<key>defaults</key>					<string>com.highrez.wificarrier</string>
+			<key>key</key>						<string>gestureType</string>
+			<key>label</key>					<string>Gesture Type</string>
+			<key>default</key>					<string>both</string>
+			<key>validValues</key>
+			<array>
+				<string>longpress</string>
+				<string>doubletap</string>
+				<string>both</string>
+			</array>
+			<key>validTitles</key>
+			<array>
+				<string>Long Press</string>
+				<string>Double Tap</string>
+				<string>Both</string>
+			</array>
+			<key>PostNotification</key> 		<string>com.highrez.wificarrier/prefsupdated</string>
+		</dict>
+		<dict>
 			<key>cell</key>						<string>PSSwitchCell</string>
 			<key>default</key>					<true/>
 			<key>defaults</key>					<string>com.highrez.wificarrier</string>
@@ -50,6 +70,17 @@
 			<key>defaults</key>					<string>com.highrez.wificarrier</string>
 			<key>key</key>						<string>enableExtIP</string>
 			<key>label</key>					<string>Public IP</string>
+			<key>PostNotification</key> 		<string>com.highrez.wificarrier/prefsupdated2</string>
+		</dict>
+		<dict>
+			<key>cell</key>						<string>PSEditTextCell</string>
+			<key>id</key>						<string>publicIPURL</string>
+			<key>default</key>					<string>https://icanhazip.com/</string>
+			<key>defaults</key>					<string>com.highrez.wificarrier</string>
+			<key>placeholder</key>				<string>https://icanhazip.com/</string>
+			<key>noAutoCorrect</key>			<true/>
+			<key>key</key>						<string>publicIPURL</string>
+			<key>label</key>					<string>URL:</string>
 			<key>PostNotification</key> 		<string>com.highrez.wificarrier/prefsupdated2</string>
 		</dict>
 

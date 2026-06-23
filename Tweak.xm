@@ -37,6 +37,8 @@ static NSString *customCarrier = @"";
 static NSString *srcWiFiCalling = @"";
 static NSString *customWiFiCalling1 = @"";
 static NSString *customWiFiCalling2 = @"";
+static NSString *gestureType = @"both";                  // longpress | doubletap | both
+static NSString *publicIPURL = @"https://icanhazip.com/";
 
 
 %hook STTelephonyStateProvider
@@ -130,12 +132,21 @@ static NSString *customWiFiCalling2 = @"";
 - (id)initWithFrame:(CGRect)frame {
     self = %orig;
 		[self addGestureRecognizer:[[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(handleGestureFrom:)]];
+		UITapGestureRecognizer *doubleTap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(handleDoubleTapFrom:)];
+		doubleTap.numberOfTapsRequired = 2;
+		[self addGestureRecognizer:doubleTap];
 	return self;
 }
 
 %new -(void)handleGestureFrom:(UILongPressGestureRecognizer *)recognizer {
-	if (enableGesture && recognizer.state == UIGestureRecognizerStateBegan) {
-		ChangeState();
+	if (enableGesture && GestureAllowsLongPress() && recognizer.state == UIGestureRecognizerStateBegan) {
+		ChangeState(recognizer.view);
+	}
+}
+
+%new -(void)handleDoubleTapFrom:(UITapGestureRecognizer *)recognizer {
+	if (enableGesture && GestureAllowsDoubleTap() && recognizer.state == UIGestureRecognizerStateRecognized) {
+		ChangeState(recognizer.view);
 	}
 }
 %end
@@ -143,59 +154,110 @@ static NSString *customWiFiCalling2 = @"";
 //--------------------------------------------------//
 // ===== Static functions local to this tweak ===== //
 
-void ChangeState() {
-	if (hasFullyLoaded)
-	{
-		if (!enableGesture)
-			return;
-		
-		//A little (simple) state machine
-		eState eStartState = eCurrentState;
-		if (!enabled)
-		{
-			eCurrentState = STATE_DISABLED;
-			return;
-		}
-		
-		if (eCurrentState == STATE_DISABLED) {
-			if (!enabled)
-				return;
-			
-			//Work out the actual current state of the display so we cycle the new state from that point...
-			if (enableIPADDR) {
-				if (enableExtIP)
-					eCurrentState = STATE_PUBLICIP;
-				else 
-					eCurrentState = STATE_INTERNALIP;
+static inline NSString *StateName(eState s) {
+	switch (s) {
+		case STATE_SSID:          return @"WiFi SSID";
+		case STATE_PUBLICIP:      return @"Public IP";
+		case STATE_INTERNALIP:    return @"Internal IP";
+		case STATE_CUSTOMCARRIER: return @"Custom Carrier";
+		case STATE_ORIGINAL:      return @"Carrier";
+		default:                  return @"Auto";
+	}
+}
+
+BOOL GestureAllowsLongPress() {
+	return [gestureType isEqualToString:@"longpress"] || [gestureType isEqualToString:@"both"];
+}
+
+BOOL GestureAllowsDoubleTap() {
+	return [gestureType isEqualToString:@"doubletap"] || [gestureType isEqualToString:@"both"];
+}
+
+static inline void PlayHaptic() {
+	UIImpactFeedbackGenerator *generator = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium];
+	[generator prepare];
+	[generator impactOccurred];
+}
+
+// Brief toast naming the mode we just switched to. Hosted in its own window on the
+// gesture view's scene so it shows over whatever is on screen (home screen or in-app).
+static inline void ShowModeHUD(eState s, UIView *anchor) {
+	NSString *text = StateName(s);
+	dispatch_async(dispatch_get_main_queue(), ^{
+		UIWindowScene *scene = nil;
+		UIWindow *anchorWindow = [anchor isKindOfClass:[UIWindow class]] ? (UIWindow *)anchor : anchor.window;
+		scene = anchorWindow.windowScene;
+		if (scene == nil) {
+			for (UIScene *sc in [UIApplication sharedApplication].connectedScenes) {
+				if ([sc isKindOfClass:[UIWindowScene class]] && sc.activationState == UISceneActivationStateForegroundActive) {
+					scene = (UIWindowScene *)sc;
+					break;
+				}
 			}
-			else if (enableSSID)
-				eCurrentState = STATE_SSID;
-			else if (enableCustomCarrier)
-				eCurrentState = STATE_CUSTOMCARRIER;
-			else {
-				//Nothing enabled... Go home!
-				eCurrentState = STATE_DISABLED;
-				return;
-			}
-			Debug([NSString stringWithFormat:@"Initial gesture state %d", (int)eCurrentState]);
 		}
-		
-		eCurrentState = eCurrentState==STATE_ORIGINAL ? STATE_SSID : (eState)((int)eCurrentState+1);
-		if (eCurrentState==STATE_SSID && !enableSSID)
-			eCurrentState=STATE_PUBLICIP;
-		if (eCurrentState==STATE_PUBLICIP && (!enableExtIP || !enableIPADDR))
-			eCurrentState=STATE_INTERNALIP;
-		if (eCurrentState==STATE_INTERNALIP && !enableIPADDR)
-			eCurrentState=STATE_CUSTOMCARRIER;		
-		else if (eCurrentState == STATE_CUSTOMCARRIER && !enableCustomCarrier)
-			eCurrentState=STATE_ORIGINAL;
-		else if (eCurrentState>STATE_ORIGINAL)
-			eCurrentState=STATE_SSID;
-		
-		Debug([NSString stringWithFormat:@"ChangeState from %d to %d", (int)eStartState, (int)eCurrentState]);
-		
-		if (eCurrentState!=eStartState)		
-			forceUpdate();
+
+		UIWindow *hudWindow = scene ? [[UIWindow alloc] initWithWindowScene:scene]
+		                            : [[UIWindow alloc] initWithFrame:[UIScreen mainScreen].bounds];
+		hudWindow.windowLevel = UIWindowLevelStatusBar + 100;
+		hudWindow.userInteractionEnabled = NO;
+		hudWindow.backgroundColor = [UIColor clearColor];
+		hudWindow.hidden = NO;
+
+		UILabel *label = [[UILabel alloc] init];
+		label.text = text;
+		label.textColor = [UIColor whiteColor];
+		label.font = [UIFont boldSystemFontOfSize:15.0];
+		label.textAlignment = NSTextAlignmentCenter;
+		label.backgroundColor = [[UIColor blackColor] colorWithAlphaComponent:0.78];
+		label.layer.cornerRadius = 12.0;
+		label.clipsToBounds = YES;
+		[label sizeToFit];
+
+		CGRect wb = hudWindow.bounds;
+		CGFloat w = label.bounds.size.width + 28.0;
+		CGFloat h = label.bounds.size.height + 14.0;
+		label.frame = CGRectMake((wb.size.width - w) / 2.0, wb.size.height * 0.16, w, h);
+		[hudWindow addSubview:label];
+
+		hudWindow.alpha = 0.0;
+		[UIView animateWithDuration:0.18 animations:^{
+			hudWindow.alpha = 1.0;
+		} completion:^(BOOL finished) {
+			[UIView animateWithDuration:0.3 delay:0.9 options:UIViewAnimationOptionCurveEaseInOut animations:^{
+				hudWindow.alpha = 0.0;
+			} completion:^(BOOL done) {
+				hudWindow.hidden = YES;
+			}];
+		}];
+	});
+}
+
+void ChangeState(UIView *host) {
+	if (!hasFullyLoaded) return;
+	if (!enableGesture) return;
+	if (!enabled) {
+		eCurrentState = STATE_DISABLED;
+		return;
+	}
+
+	eState eStartState = eCurrentState;
+
+	// Fixed cycle, independent of the display-option toggles (Use IP Address etc.):
+	// WiFi SSID -> Public IP -> Internal IP -> Carrier (original) -> back to SSID
+	switch (eCurrentState) {
+		case STATE_SSID:       eCurrentState = STATE_PUBLICIP;   break;
+		case STATE_PUBLICIP:   eCurrentState = STATE_INTERNALIP; break;
+		case STATE_INTERNALIP: eCurrentState = STATE_ORIGINAL;   break;
+		case STATE_ORIGINAL:   eCurrentState = STATE_SSID;       break;
+		default:               eCurrentState = STATE_SSID;       break; // from Auto / Custom Carrier
+	}
+
+	Debug([NSString stringWithFormat:@"ChangeState from '%@' to '%@'", StateName(eStartState), StateName(eCurrentState)]);
+
+	if (eCurrentState != eStartState) {
+		PlayHaptic();
+		ShowModeHUD(eCurrentState, host);
+		forceUpdate();
 	}
 }
 
@@ -206,7 +268,7 @@ static inline NSString *GetCarrierText(id original) {
 	BOOL setNetwork = NO;
 	NSString* networkName = GetNetworkNameOrIP(); 
 	if (!IsEmpty(networkName)) {
-		setNetwork = enableSSID || enableIPADDR || eCurrentState == STATE_ORIGINAL;
+		setNetwork = enableSSID || enableIPADDR || eCurrentState != STATE_DISABLED;
 		newNetwork = networkName;
 	}
 
@@ -270,67 +332,78 @@ static inline void forceUpdate() {
 //	forceUpdate();
 //}
 
+// Fetch the public IP (once), gated on the configured host being reachable.
+static inline void MaybeFetchPublicIP()
+{
+	if (bIsGettingIP || !IsEmpty(publicIP))
+		return;
+	bIsGettingIP = YES;
+	NSString *host = [[NSURL URLWithString:publicIPURL] host];
+	if (IsEmpty(host))
+		host = @"icanhazip.com";
+	SCNetworkReachabilityRef reachability = SCNetworkReachabilityCreateWithName(NULL, [host UTF8String]);
+	if (reachability) {
+		SCNetworkReachabilityFlags flags;
+		bool success = SCNetworkReachabilityGetFlags(reachability, &flags);
+		BOOL bAvailable = (success && (flags & kSCNetworkFlagsReachable));
+		if (bAvailable)
+			GetPublicIP();
+		else
+			bIsGettingIP = NO;
+		CFRelease(reachability);
+	} else {
+		bIsGettingIP = NO;
+	}
+}
+
 static inline NSString *GetNetworkNameOrIP()
 {
 	SBWiFiManager *manager = [%c(SBWiFiManager) sharedInstance];
-	bool bAvailable = NO;
 	NSString *networkName = [manager currentNetworkName];
 
-	if (eCurrentState==STATE_ORIGINAL)
-		return originalName;
-
-	if (eCurrentState==STATE_CUSTOMCARRIER)
-		return customCarrier;
-
-	if (eCurrentState==STATE_SSID)
-		return networkName;
-
-	if (enableIPADDR && (eCurrentState==STATE_PUBLICIP || eCurrentState==STATE_INTERNALIP || eCurrentState==STATE_DISABLED)) {
-		if (enableExtIP && eCurrentState==STATE_PUBLICIP || eCurrentState==STATE_DISABLED) {
-			if (!bIsGettingIP) {
-				bIsGettingIP = YES;
-				//Get the public IP - only if the server is reachable....
-				SCNetworkReachabilityRef reachability = SCNetworkReachabilityCreateWithName(NULL, [@"icanhazip.com" UTF8String]);
-				if (reachability) {
-					SCNetworkReachabilityFlags flags;
-					bool success = SCNetworkReachabilityGetFlags(reachability, &flags);
-					bAvailable = (success && (flags & kSCNetworkFlagsReachable));
-					if (bAvailable && IsEmpty(publicIP)) {
-						GetPublicIP();
-					}
-					else bIsGettingIP = NO;
-					CFRelease(reachability);
-				}
-				else bIsGettingIP = NO;
-			}
-		} else
-		{
+	switch (eCurrentState) {
+		case STATE_ORIGINAL:
 			publicIP = @"";
-		}
-		NSString* ip = GetIPAddress();
-		if (enableExtIP) {
-			if (eCurrentState==STATE_INTERNALIP)
-				return ip;
+			return originalName;
 
+		case STATE_CUSTOMCARRIER:
+			publicIP = @"";
+			return customCarrier;
+
+		case STATE_SSID:
+			publicIP = @"";
+			return networkName;
+
+		case STATE_INTERNALIP:
+			publicIP = @"";
+			return GetIPAddress();
+
+		case STATE_PUBLICIP: {
+			// Gesture-selected: always show the public IP regardless of the toggles.
+			MaybeFetchPublicIP();
+			NSString *ip = GetIPAddress();
 			if (IsEmpty(publicIP))
-			{
-				if (!IsEmpty(ip)) //We have a local IP but no public IP... Append ?! to front (ie. looking)
-					return  [NSString stringWithFormat: @"🔍 %@", ip];
-			}
-			else {
-				return publicIP;
-			}
+				return IsEmpty(ip) ? networkName : [NSString stringWithFormat:@"🔍 %@", ip];
+			return publicIP;
 		}
-		return ip;
-	}
-	else
-	{
-		//Clear the cached public IP
-		publicIP = @"";
-	}
 
-	//Return the SSID
-	return networkName;
+		case STATE_DISABLED:
+		default:
+			// Automatic display (no gesture active), governed by the toggles.
+			if (enableIPADDR) {
+				if (enableExtIP) {
+					MaybeFetchPublicIP();
+					NSString *ip = GetIPAddress();
+					if (IsEmpty(publicIP))
+						return IsEmpty(ip) ? networkName : [NSString stringWithFormat:@"🔍 %@", ip];
+					return publicIP;
+				}
+				publicIP = @"";
+				return GetIPAddress();
+			}
+			publicIP = @"";
+			return networkName;
+	}
 }
 
 static inline NSString *GetIPAddress()
@@ -357,16 +430,22 @@ static inline NSString *GetIPAddress()
 
 static inline void GetPublicIP()
 {
+	NSURL *url = [NSURL URLWithString:publicIPURL];
+	if (url == nil) {
+		publicIP = @"";
+		bIsGettingIP = NO;
+		return;
+	}
 	NSURLSession *session = [NSURLSession sharedSession];
-	[[session dataTaskWithURL:[NSURL URLWithString:@"https://icanhazip.com/"]
+	[[session dataTaskWithURL:url
           completionHandler:^(NSData *data,
                               NSURLResponse *response,
                               NSError *error) {
-            
+
 			if (error==nil) {
 				NSString *result = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
 				if (!IsEmpty(result))
-					result = [result stringByTrimmingCharactersInSet:[NSCharacterSet newlineCharacterSet]]; // IP comes with a newline for some reason
+					result = [result stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]]; // trim trailing newline/space
 				publicIP = result;
 				forceUpdate();
 				bIsGettingIP = NO;
@@ -416,6 +495,9 @@ static void loadPrefs() {
 	customWiFiCalling1 = ( [prefs objectForKey:@"wifiCalling1"] ? [[prefs objectForKey:@"wifiCalling1"] stringValue] : nil );
 	customWiFiCalling2 = ( [prefs objectForKey:@"wifiCalling2"] ? [[prefs objectForKey:@"wifiCalling2"] stringValue] : nil );
 
+	gestureType = ( [prefs objectForKey:@"gestureType"] ? [prefs objectForKey:@"gestureType"] : @"both" );
+	publicIPURL = ( ([prefs objectForKey:@"publicIPURL"] && [[prefs objectForKey:@"publicIPURL"] length] > 0) ? [prefs objectForKey:@"publicIPURL"] : @"https://icanhazip.com/" );
+
 	Debug([NSString stringWithFormat: @"enabled: %@", enabled ? @"YES" : @"NO"]);
 	Debug([NSString stringWithFormat: @"enableGesture: %@", enableGesture ? @"YES" : @"NO"]);
 	Debug([NSString stringWithFormat: @"enableSSID: %@", enableSSID ? @"YES" : @"NO"]);
@@ -427,6 +509,8 @@ static void loadPrefs() {
 	Debug([NSString stringWithFormat: @"srcWiFiCalling: %@", srcWiFiCalling]);
 	Debug([NSString stringWithFormat: @"customWiFiCalling1: %@", customWiFiCalling1]);
 	Debug([NSString stringWithFormat: @"customWiFiCalling2: %@", customWiFiCalling2]);
+	Debug([NSString stringWithFormat: @"gestureType: %@", gestureType]);
+	Debug([NSString stringWithFormat: @"publicIPURL: %@", publicIPURL]);
   }
   else {
 	Debug(@"Unable to load preferences!");
@@ -436,11 +520,13 @@ static void loadPrefs() {
 
 static void refreshPrefs() {
   loadPrefs();
+  publicIP = @"";
   forceUpdate();
 }
 
 static void refreshPrefs2() {
   loadPrefs();
+  publicIP = @"";
   eCurrentState = STATE_DISABLED;
   forceUpdate();
 }

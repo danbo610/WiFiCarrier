@@ -62,7 +62,9 @@ static inline NSString *GetIPAddress();
 static inline BOOL IsEmpty(id thing);
 static inline NSString *GetCarrierText(id original);
 
-extern void ChangeState();
+extern void ChangeState(UIView *host);
+extern BOOL GestureAllowsLongPress();
+extern BOOL GestureAllowsDoubleTap();
 extern void Debug(id thing);
 extern void DeleteDebugLog();
 

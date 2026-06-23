@@ -15,12 +15,23 @@
 		[statusBar addGestureRecognizer:[[UILongPressGestureRecognizer alloc]
 			initWithTarget:self action:@selector(wfcGestureHandler:)
 		]];
+		UITapGestureRecognizer *doubleTap = [[UITapGestureRecognizer alloc]
+			initWithTarget:self action:@selector(wfcDoubleTapHandler:)];
+		doubleTap.numberOfTapsRequired = 2;
+		[statusBar addGestureRecognizer:doubleTap];
 	}
 
 	%new
 	- (void)wfcGestureHandler:(UILongPressGestureRecognizer  *)recognizer {
-		if (enableGesture && recognizer.state == UIGestureRecognizerStateBegan) {
-			ChangeState();
+		if (enableGesture && GestureAllowsLongPress() && recognizer.state == UIGestureRecognizerStateBegan) {
+			ChangeState(recognizer.view);
+		}
+	}
+
+	%new
+	- (void)wfcDoubleTapHandler:(UITapGestureRecognizer *)recognizer {
+		if (enableGesture && GestureAllowsDoubleTap() && recognizer.state == UIGestureRecognizerStateRecognized) {
+			ChangeState(recognizer.view);
 		}
 	}
 	%end // SBMainDisplaySceneLayoutStatusBarView

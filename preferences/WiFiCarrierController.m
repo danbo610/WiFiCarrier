@@ -12,10 +12,29 @@ MFMailComposeViewController *mMFComposer;
 
 - (NSArray *)specifiers {
 	if (!_specifiers) {
-		_specifiers = [[self loadSpecifiersFromPlistName:@"Root" target:self] retain];
+		NSMutableArray *specifiers = [[self loadSpecifiersFromPlistName:@"Root" target:self] mutableCopy];
+		// Cache the Public IP URL field so we can show/hide it on demand.
+		for (PSSpecifier *specifier in specifiers) {
+			if ([[specifier propertyForKey:@"id"] isEqualToString:@"publicIPURL"]) {
+				[_urlSpecifier release];
+				_urlSpecifier = [specifier retain];
+				break;
+			}
+		}
+		// Only show the URL field when Public IP is enabled.
+		if (![self publicIPEnabled] && _urlSpecifier) {
+			[specifiers removeObject:_urlSpecifier];
+		}
+		_specifiers = specifiers;
 	}
 
 	return _specifiers;
+}
+
+- (BOOL)publicIPEnabled {
+	NSDictionary *settings = [NSDictionary dictionaryWithContentsOfFile:@"/var/mobile/Library/Preferences/com.highrez.wificarrier.plist"];
+	id value = settings[@"enableExtIP"];
+	return value ? [value boolValue] : YES;
 }
 
 - (id)readPreferenceValue:(PSSpecifier*)specifier {
@@ -27,8 +46,21 @@ MFMailComposeViewController *mMFComposer;
 - (void)setPreferenceValue:(id)value specifier:(PSSpecifier*)specifier {
 	NSString *path = [NSString stringWithFormat:@"/var/mobile/Library/Preferences/%@.plist", specifier.properties[@"defaults"]];
 	NSMutableDictionary *settings = [NSMutableDictionary dictionaryWithContentsOfFile:path];
+	if (!settings) settings = [NSMutableDictionary dictionary];
 	[settings setObject:value forKey:specifier.properties[@"key"]];
 	[settings writeToFile:path atomically:YES];
+
+	// Show/hide the Public IP URL field live when the Public IP switch is toggled.
+	if ([specifier.properties[@"key"] isEqualToString:@"enableExtIP"] && _urlSpecifier) {
+		BOOL on = [value boolValue];
+		BOOL present = ([self indexOfSpecifier:_urlSpecifier] != NSNotFound);
+		if (on && !present) {
+			[self insertSpecifier:_urlSpecifier afterSpecifier:specifier animated:YES];
+		} else if (!on && present) {
+			[self removeSpecifier:_urlSpecifier animated:YES];
+		}
+	}
+
 	CFStringRef notificationName = (CFStringRef)specifier.properties[@"PostNotification"];
 	if (notificationName) {
 		CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(), notificationName, NULL, NULL, YES);

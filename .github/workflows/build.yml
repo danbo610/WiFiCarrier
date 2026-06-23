@@ -9,8 +9,16 @@ on:
 
 jobs:
   build:
-    runs-on: macos-latest
+    runs-on: macos-14
     steps:
+      # Pin the Xcode (and therefore iOS SDK) version so the build is reproducible:
+      # macos-latest + the floating "latest" SDK could silently change behaviour when
+      # GitHub bumps the runner image. Xcode 15.4 ships the iOS 17.5 SDK.
+      - name: Select Xcode 15.4
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: '15.4'
+
       - name: Checkout
         uses: actions/checkout@v4
 

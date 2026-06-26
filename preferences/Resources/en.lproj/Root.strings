@@ -1,0 +1,44 @@
+/* WiFiCarrier+ settings — English (development language; keys match Root.plist) */
+
+"Enable" = "Enable";
+"Status Bar Gesture" = "Status Bar Gesture";
+"Gesture Type" = "Gesture Type";
+"Long Press" = "Long Press";
+"Double Tap" = "Double Tap";
+"Both" = "Both";
+"Per-SIM Display" = "Per-SIM Display";
+"SIM 1" = "SIM 1";
+"SIM 2" = "SIM 2";
+"Each SIM is configured independently — switch with the tab above. The status-bar gesture (left half = SIM 1, right half = SIM 2) cycles WiFi SSID → Public IP → Internal IP → Carrier for that SIM." = "Each SIM is configured independently — switch with the tab above. The status-bar gesture (left half = SIM 1, right half = SIM 2) cycles WiFi SSID → Public IP → Internal IP → Carrier for that SIM.";
+"Use WiFi SSID" = "Use WiFi SSID";
+"Use IP Address" = "Use IP Address";
+"Public IP" = "Public IP";
+"URL:" = "URL:";
+"IP Location" = "IP Location";
+"None" = "None";
+"Country/Region" = "Country/Region";
+"Country Only" = "Country Only";
+"Custom Carrier" = "Custom Carrier";
+"With custom carrier text enabled, leave this empty to hide the carrier text." = "With custom carrier text enabled, leave this empty to hide the carrier text.";
+"Custom Carrier Text" = "Custom Carrier Text";
+"Wifi Calling" = "Wifi Calling";
+"* Only applicable when not using SSID/IP" = "* Only applicable when not using SSID/IP";
+"Detect WiFi Calling" = "Detect WiFi Calling";
+"Carrier WFC:" = "Carrier WFC:";
+"Append to SSID" = "Append to SSID";
+"Add to SSID:" = "Add to SSID:";
+"Append to custom carrier" = "Append to custom carrier";
+"Add to Carrier*:" = "Add to Carrier*:";
+"Debugging" = "Debugging";
+"Send by Email" = "Send by Email";
+"Buy me a beer" = "Buy me a beer";
+"Donate via PayPal" = "Donate via PayPal";
+"Created by Phil Gibbons, based on the work by NoisyFlake" = "Created by Phil Gibbons, based on the work by NoisyFlake";
+
+/* WiFiCarrierController (code-only strings) */
+"Save" = "Save";
+"SIM %@" = "SIM %@";
+"SIM %@ · %@" = "SIM %@ · %@";
+"The debug log is empty." = "The debug log is empty.";
+"OK" = "OK";
+"WiFiCarrier Debug" = "WiFiCarrier Debug";

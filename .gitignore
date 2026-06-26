@@ -3,5 +3,6 @@ obj/
 /packages
 out/
 docs/
+docs/**/*.md
 *.deb
 .DS_Store

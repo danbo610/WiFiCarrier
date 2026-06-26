@@ -18,7 +18,8 @@ static BOOL bIsGettingIP[3] = {NO, NO, NO};   // per-slot (idx 1 = SIM 1, 2 = SI
 // Original values from SBTelephonyManager
 static NSString *originalName = @"";
 static NSString *publicIP[3] = {@"", @"", @""};   // per-slot public IP cache (idx 1/2)
-static NSString *publicIPGeo[3] = {@"", @"", @""};   // per-slot "(country/region)" suffix from ipinfo.io
+static NSString *publicIPGeoCountry[3] = {@"", @"", @""};   // per-slot country code from ipinfo.io
+static NSString *publicIPGeoRegion[3] = {@"", @"", @""};    // per-slot region from ipinfo.io
 static id subscriptionContext = nil;
 static eState eCurrentState = STATE_DISABLED;
 
@@ -32,7 +33,7 @@ static NSString *originalName2 = @"";
 // per-SIM preference keys (e.g. enableSSID_1 / enableSSID_2); GetCarrierTextForSlot
 // "pages" the chosen slot's config into the working globals and reuses GetCarrierText.
 static BOOL gEnableSSID[3], gEnableIPADDR[3], gEnableExtIP[3], gEnableCustom[3], gEnableWFC[3];
-static NSString *gCustomCarrier[3], *gSrcWFC[3], *gWFC1[3], *gWFC2[3], *gPublicIPURL[3];
+static NSString *gCustomCarrier[3], *gSrcWFC[3], *gWFC1[3], *gWFC2[3], *gPublicIPURL[3], *gIpGeoMode[3];
 static eState gState[3];   // per-slot gesture cycle position (STATE_DISABLED = follow toggles)
 static NSString *gLastPublished[3];   // last carrier name written to the carriers file
 
@@ -65,24 +66,46 @@ static int gActiveSlot = 1;   // scratch: which slot GetCarrierText/GetNetworkNa
 // change: the public IP belongs to the device's current egress route, not one slot, so
 // both slots must re-fetch (each via its own configured URL on the next render).
 static inline void ClearPublicIPCache() {
-	publicIP[1] = @"";    publicIPGeo[1] = @"";
-	publicIP[2] = @"";    publicIPGeo[2] = @"";
+	publicIP[1] = @"";    publicIPGeoCountry[1] = @"";    publicIPGeoRegion[1] = @"";
+	publicIP[2] = @"";    publicIPGeoCountry[2] = @"";    publicIPGeoRegion[2] = @"";
 }
 
-// "1.2.3.4" + "(US/California)" -> "1.2.3.4(US/California)". The geo suffix is filled in
+// Build the parenthesised geo suffix for a slot's ipGeoMode ("none" skips lookup entirely).
+static inline NSString *GeoSuffixForSlot(int slot) {
+	if (slot != 1 && slot != 2) return @"";
+	NSString *mode = gIpGeoMode[slot] ?: @"country_region";
+	if ([mode isEqualToString:@"none"]) return @"";
+	NSString *country = publicIPGeoCountry[slot];
+	NSString *region  = publicIPGeoRegion[slot];
+	BOOL hasC = [country isKindOfClass:[NSString class]] && [country length] > 0;
+	BOOL hasR = [region  isKindOfClass:[NSString class]] && [region  length] > 0;
+	if ([mode isEqualToString:@"country_only"]) {
+		if (hasC) return [NSString stringWithFormat:@"(%@)", country];
+		return @"";
+	}
+	// country_region
+	if (hasC && hasR) return [NSString stringWithFormat:@"(%@/%@)", country, region];
+	if (hasC)         return [NSString stringWithFormat:@"(%@)", country];
+	if (hasR)         return [NSString stringWithFormat:@"(%@)", region];
+	return @"";
+}
+
+// "1.2.3.4" + "(US/California)" -> "1.2.3.4(US/California)". Geo is filled in
 // asynchronously by FetchGeoForSlot, so until it arrives we just show the bare IP.
 static inline NSString *PublicIPWithGeo(int slot) {
 	if (slot != 1 && slot != 2) return @"";
-	if (IsEmpty(publicIP[slot]) || IsEmpty(publicIPGeo[slot]))
+	NSString *suffix = GeoSuffixForSlot(slot);
+	if (IsEmpty(publicIP[slot]) || IsEmpty(suffix))
 		return publicIP[slot];
-	return [NSString stringWithFormat:@"%@%@", publicIP[slot], publicIPGeo[slot]];
+	return [NSString stringWithFormat:@"%@%@", publicIP[slot], suffix];
 }
 
-// Second hop after we have the public IP: ask ipinfo.io for its country/region and cache
-// a "(country/region)" suffix for this slot, then refresh. NSURLComponents handles IPv6
-// (the address has colons) which a bare URLWithString: would reject.
+// Second hop after we have the public IP: ask ipinfo.io for country/region, cache per slot,
+// then refresh. Skipped when ipGeoMode is "none". NSURLComponents handles IPv6 addresses.
 static inline void FetchGeoForSlot(int slot, NSString *ip) {
 	if ((slot != 1 && slot != 2) || IsEmpty(ip)) return;
+	NSString *mode = gIpGeoMode[slot] ?: @"country_region";
+	if ([mode isEqualToString:@"none"]) return;
 	NSURLComponents *comp = [NSURLComponents componentsWithString:@"https://ipinfo.io"];
 	if (comp == nil) return;
 	comp.path = [NSString stringWithFormat:@"/%@/json", ip];
@@ -96,16 +119,13 @@ static inline void FetchGeoForSlot(int slot, NSString *ip) {
 		if (![publicIP[slot] isEqualToString:ip]) return;
 		NSDictionary *info = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
 		if (![info isKindOfClass:[NSDictionary class]]) return;
-		NSString *country = info[@"country"];
-		NSString *region  = info[@"region"];
-		BOOL hasC = [country isKindOfClass:[NSString class]] && [country length] > 0;
-		BOOL hasR = [region  isKindOfClass:[NSString class]] && [region  length] > 0;
-		NSString *geo = @"";
-		if (hasC && hasR) geo = [NSString stringWithFormat:@"(%@/%@)", country, region];
-		else if (hasC)    geo = [NSString stringWithFormat:@"(%@)", country];
-		else if (hasR)    geo = [NSString stringWithFormat:@"(%@)", region];
-		if (![publicIPGeo[slot] isEqualToString:geo]) {
-			publicIPGeo[slot] = geo;
+		NSString *country = [info[@"country"] isKindOfClass:[NSString class]] ? info[@"country"] : @"";
+		NSString *region  = [info[@"region"]  isKindOfClass:[NSString class]] ? info[@"region"]  : @"";
+		BOOL changed = ![publicIPGeoCountry[slot] isEqualToString:country]
+		            || ![publicIPGeoRegion[slot]  isEqualToString:region];
+		if (changed) {
+			publicIPGeoCountry[slot] = country;
+			publicIPGeoRegion[slot]  = region;
 			forceUpdate();
 		}
 	  }] resume];
@@ -606,14 +626,16 @@ static inline void GetPublicIP(int slot)
 				if (!IsEmpty(result))
 					result = [result stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]]; // trim trailing newline/space
 				publicIP[slot] = result;
-				publicIPGeo[slot] = @"";          // clear stale geo; FetchGeoForSlot refills it
+				publicIPGeoCountry[slot] = @"";   // clear stale geo; FetchGeoForSlot refills it
+				publicIPGeoRegion[slot] = @"";
 				forceUpdate();
-				FetchGeoForSlot(slot, result);    // second hop: resolve country/region
+				FetchGeoForSlot(slot, result);
 				bIsGettingIP[slot] = NO;
 			}
 			else {
 				publicIP[slot] = @"";
-				publicIPGeo[slot] = @"";
+				publicIPGeoCountry[slot] = @"";
+				publicIPGeoRegion[slot] = @"";
 				bIsGettingIP[slot] = NO;
 			}
 	  }] resume];
@@ -637,6 +659,17 @@ static inline BOOL PrefBool(NSDictionary *prefs, NSString *base, int slot, BOOL 
 static inline NSString *PrefStr(NSDictionary *prefs, NSString *base, int slot, NSString *def) {
 	id v = [prefs objectForKey:[NSString stringWithFormat:@"%@_%d", base, slot]];
 	return [v isKindOfClass:[NSString class]] ? (NSString *)v : def;
+}
+static inline NSString *PrefIpGeoMode(NSDictionary *prefs, int slot) {
+	NSString *def = @"country_region";
+	id v = [prefs objectForKey:[NSString stringWithFormat:@"ipGeoMode_%d", slot]];
+	if ([v isKindOfClass:[NSString class]] && [(NSString *)v length] > 0)
+		return (NSString *)v;
+	if ([v isKindOfClass:[NSNumber class]]) {
+		int i = [v intValue];
+		return (i == 0) ? @"none" : (i == 1) ? @"country_region" : @"country_only";
+	}
+	return def;
 }
 
 static void loadPrefs() {
@@ -669,8 +702,9 @@ static void loadPrefs() {
 		gWFC2[s]          = PrefStr(prefs, @"wifiCalling2", s, @"");
 		NSString *url     = PrefStr(prefs, @"publicIPURL", s, @"https://ipv4.icanhazip.com/");
 		gPublicIPURL[s]   = [url length] ? url : @"https://ipv4.icanhazip.com/";
-		Debug([NSString stringWithFormat:@"SIM %d: SSID=%d IP=%d ExtIP=%d Custom=%d('%@') WFC=%d state=%d url=%@",
-			s, gEnableSSID[s], gEnableIPADDR[s], gEnableExtIP[s], gEnableCustom[s], gCustomCarrier[s], gEnableWFC[s], (int)gState[s], gPublicIPURL[s]]);
+		gIpGeoMode[s]     = PrefIpGeoMode(prefs, s);
+		Debug([NSString stringWithFormat:@"SIM %d: SSID=%d IP=%d ExtIP=%d geo=%@ Custom=%d('%@') WFC=%d state=%d url=%@",
+			s, gEnableSSID[s], gEnableIPADDR[s], gEnableExtIP[s], gIpGeoMode[s], gEnableCustom[s], gCustomCarrier[s], gEnableWFC[s], (int)gState[s], gPublicIPURL[s]]);
 	}
 
 	// gestureType is stored as a string ("longpress"/"doubletap"/"both"); accept a

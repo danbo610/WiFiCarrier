@@ -1,12 +1,25 @@
 #include "../Version.h"
 #include "WiFiCarrierController.h"
 
+static NSBundle *WFCBundle(void) {
+	static NSBundle *bundle;
+	static dispatch_once_t once;
+	dispatch_once(&once, ^{
+		bundle = [NSBundle bundleForClass:[WiFiCarrierController class]];
+	});
+	return bundle;
+}
+
+static inline NSString *WFCStr(NSString *key) {
+	return NSLocalizedStringFromTableInBundle(key, @"Root", WFCBundle(), key);
+}
+
 @implementation WiFiCarrierController
 MFMailComposeViewController *mMFComposer;
 
 - (void)viewWillAppear:(BOOL)animated {
     [super viewWillAppear:animated];
-    UIBarButtonItem *applyButton = [[UIBarButtonItem alloc] initWithTitle:@"Save" style:UIBarButtonItemStylePlain target:self action:@selector(save)];
+    UIBarButtonItem *applyButton = [[UIBarButtonItem alloc] initWithTitle:WFCStr(@"Save") style:UIBarButtonItemStylePlain target:self action:@selector(save)];
     self.navigationItem.rightBarButtonItem = applyButton;
 }
 
@@ -17,8 +30,9 @@ MFMailComposeViewController *mMFComposer;
 		BOOL publicIPOn = [self publicIPEnabled];
 		NSMutableArray *toRemove = [NSMutableArray array];
 		for (PSSpecifier *s in specifiers) {
-			// Hide the (per-SIM) Public IP URL row unless the active SIM's Public IP is on.
-			if ([[s propertyForKey:@"id"] isEqualToString:@"publicIPURL"] && !publicIPOn) {
+			// Hide Public IP sub-rows unless the active SIM's Public IP is on.
+			NSString *sid = [s propertyForKey:@"id"];
+			if (([sid isEqualToString:@"publicIPURL"] || [sid isEqualToString:@"ipGeoMode"]) && !publicIPOn) {
 				[toRemove addObject:s];
 				continue;
 			}
@@ -43,8 +57,8 @@ MFMailComposeViewController *mMFComposer;
 	NSString *active = [self activeSIMTab];
 	NSString *name = carriers[active];
 	NSString *label = ([name isKindOfClass:[NSString class]] && [name length])
-		? [NSString stringWithFormat:@"SIM %@ · %@", active, name]
-		: [NSString stringWithFormat:@"SIM %@", active];
+		? [NSString stringWithFormat:WFCStr(@"SIM %@ · %@"), active, name]
+		: [NSString stringWithFormat:WFCStr(@"SIM %@"), active];
 	for (PSSpecifier *s in specifiers) {
 		if ([[s propertyForKey:@"id"] isEqualToString:@"carrierHeader"]) {
 			[s setName:label];
@@ -106,16 +120,16 @@ MFMailComposeViewController *mMFComposer;
 		NSArray *toRecipents = [NSArray arrayWithObject:@"WiFiCarrier@highrez.co.uk"];
 		mMFComposer = [[MFMailComposeViewController alloc] init];
 		mMFComposer.mailComposeDelegate = self;
-		[mMFComposer setSubject:@"WiFiCarrier Debug"];
+		[mMFComposer setSubject:WFCStr(@"WiFiCarrier Debug")];
 		[mMFComposer setMessageBody:messageBody isHTML:NO];
 		[mMFComposer setToRecipients:toRecipents];
 		[self presentViewController:mMFComposer animated:YES completion:NULL];
 	} else {
 		UIAlertController* alert = [UIAlertController alertControllerWithTitle:@"WiFiCarrier+"
-                           message:@"The debug log is empty."
+                           message:WFCStr(@"The debug log is empty.")
                            preferredStyle:UIAlertControllerStyleAlert];
 
-		UIAlertAction* defaultAction = [UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault
+		UIAlertAction* defaultAction = [UIAlertAction actionWithTitle:WFCStr(@"OK") style:UIAlertActionStyleDefault
 							handler:^(UIAlertAction * action) {}];
 
 		[alert addAction:defaultAction];

@@ -115,6 +115,35 @@
 			<key>label</key>					<string>URL:</string>
 			<key>PostNotification</key> 		<string>com.highrez.wificarrier/prefsupdated2</string>
 		</dict>
+		<dict>
+			<key>cell</key>						<string>PSLinkListCell</string>
+			<key>perSIM</key>					<true/>
+			<key>id</key>						<string>ipGeoMode</string>
+			<key>defaults</key>					<string>com.highrez.wificarrier</string>
+			<key>key</key>						<string>ipGeoMode</string>
+			<key>label</key>					<string>IP Location</string>
+			<key>detail</key>					<string>PSListItemsController</string>
+			<key>default</key>					<string>country_region</string>
+			<key>validValues</key>
+			<array>
+				<string>none</string>
+				<string>country_region</string>
+				<string>country_only</string>
+			</array>
+			<key>validTitles</key>
+			<array>
+				<string>None</string>
+				<string>Country/Region</string>
+				<string>Country Only</string>
+			</array>
+			<key>shortTitles</key>
+			<array>
+				<string>None</string>
+				<string>Country/Region</string>
+				<string>Country Only</string>
+			</array>
+			<key>PostNotification</key> 		<string>com.highrez.wificarrier/prefsupdated</string>
+		</dict>
 
 		<dict>
 			<key>cell</key> 					<string>PSGroupCell</string>

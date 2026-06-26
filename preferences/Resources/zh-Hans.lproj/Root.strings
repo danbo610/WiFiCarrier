@@ -1,0 +1,44 @@
+/* WiFiCarrier+ 设置 — 简体中文 */
+
+"Enable" = "启用";
+"Status Bar Gesture" = "状态栏手势";
+"Gesture Type" = "手势类型";
+"Long Press" = "长按";
+"Double Tap" = "双击";
+"Both" = "两者";
+"Per-SIM Display" = "按 SIM 卡显示";
+"SIM 1" = "SIM 1";
+"SIM 2" = "SIM 2";
+"Each SIM is configured independently — switch with the tab above. The status-bar gesture (left half = SIM 1, right half = SIM 2) cycles WiFi SSID → Public IP → Internal IP → Carrier for that SIM." = "每张 SIM 卡可独立配置 — 使用上方标签切换。状态栏手势（左半 = SIM 1，右半 = SIM 2）可循环：WiFi SSID → 公网 IP → 内网 IP → 运营商。";
+"Use WiFi SSID" = "使用 WiFi SSID";
+"Use IP Address" = "使用 IP 地址";
+"Public IP" = "公网 IP";
+"URL:" = "URL：";
+"IP Location" = "显示 IP 归属";
+"None" = "不显示";
+"Country/Region" = "国家/地区";
+"Country Only" = "仅国家";
+"Custom Carrier" = "自定义运营商";
+"With custom carrier text enabled, leave this empty to hide the carrier text." = "启用自定义运营商文字后，留空可隐藏状态栏运营商文字。";
+"Custom Carrier Text" = "自定义运营商文字";
+"Wifi Calling" = "WiFi 通话";
+"* Only applicable when not using SSID/IP" = "* 仅在不使用 SSID/IP 时生效";
+"Detect WiFi Calling" = "检测 WiFi 通话";
+"Carrier WFC:" = "运营商 WFC：";
+"Append to SSID" = "追加到 SSID";
+"Add to SSID:" = "追加到 SSID：";
+"Append to custom carrier" = "追加到自定义运营商";
+"Add to Carrier*:" = "追加到运营商*：";
+"Debugging" = "调试";
+"Send by Email" = "通过邮件发送";
+"Buy me a beer" = "请我喝杯啤酒";
+"Donate via PayPal" = "通过 PayPal 捐赠";
+"Created by Phil Gibbons, based on the work by NoisyFlake" = "由 Phil Gibbons 制作，基于 NoisyFlake 的工作";
+
+/* WiFiCarrierController */
+"Save" = "保存";
+"SIM %@" = "SIM %@";
+"SIM %@ · %@" = "SIM %@ · %@";
+"The debug log is empty." = "调试日志为空。";
+"OK" = "好";
+"WiFiCarrier Debug" = "WiFiCarrier 调试";

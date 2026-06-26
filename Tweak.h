@@ -55,11 +55,11 @@ extern BOOL enableGesture;
 
 // Statics //
 static inline void forceUpdate();
-static inline void GetPublicIP();
+static inline void GetPublicIP(int slot);
 
 static inline NSString *GetNetworkNameOrIP();
 static inline NSString *GetIPAddress();
-static inline void MaybeFetchPublicIP();
+static inline void MaybeFetchPublicIP(int slot);
 static inline BOOL IsEmpty(id thing);
 static inline NSString *GetCarrierText(id original);
 static inline int SlotForContext(id ctx);

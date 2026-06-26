@@ -13,11 +13,12 @@ static NSDateFormatter *dateFormatter = nil;
 
 static BOOL hasFullyLoaded = NO;
 static BOOL bLastVPN = NO;
-static BOOL bIsGettingIP = NO;
+static BOOL bIsGettingIP[3] = {NO, NO, NO};   // per-slot (idx 1 = SIM 1, 2 = SIM 2)
 
 // Original values from SBTelephonyManager
 static NSString *originalName = @"";
-static NSString *publicIP = @"";
+static NSString *publicIP[3] = {@"", @"", @""};   // per-slot public IP cache (idx 1/2)
+static NSString *publicIPGeo[3] = {@"", @"", @""};   // per-slot "(country/region)" suffix from ipinfo.io
 static id subscriptionContext = nil;
 static eState eCurrentState = STATE_DISABLED;
 
@@ -58,6 +59,57 @@ static NSString *customWiFiCalling1 = @"";
 static NSString *customWiFiCalling2 = @"";
 static NSString *gestureType = @"both";                  // longpress | doubletap | both
 static NSString *publicIPURL = @"https://ipv4.icanhazip.com/"; // scratch (paged-in per slot)
+static int gActiveSlot = 1;   // scratch: which slot GetCarrierText/GetNetworkNameOrIP renders now
+
+// Invalidate both SIMs' cached public IP. Call when the device's network/SIM/VPN/prefs
+// change: the public IP belongs to the device's current egress route, not one slot, so
+// both slots must re-fetch (each via its own configured URL on the next render).
+static inline void ClearPublicIPCache() {
+	publicIP[1] = @"";    publicIPGeo[1] = @"";
+	publicIP[2] = @"";    publicIPGeo[2] = @"";
+}
+
+// "1.2.3.4" + "(US/California)" -> "1.2.3.4(US/California)". The geo suffix is filled in
+// asynchronously by FetchGeoForSlot, so until it arrives we just show the bare IP.
+static inline NSString *PublicIPWithGeo(int slot) {
+	if (slot != 1 && slot != 2) return @"";
+	if (IsEmpty(publicIP[slot]) || IsEmpty(publicIPGeo[slot]))
+		return publicIP[slot];
+	return [NSString stringWithFormat:@"%@%@", publicIP[slot], publicIPGeo[slot]];
+}
+
+// Second hop after we have the public IP: ask ipinfo.io for its country/region and cache
+// a "(country/region)" suffix for this slot, then refresh. NSURLComponents handles IPv6
+// (the address has colons) which a bare URLWithString: would reject.
+static inline void FetchGeoForSlot(int slot, NSString *ip) {
+	if ((slot != 1 && slot != 2) || IsEmpty(ip)) return;
+	NSURLComponents *comp = [NSURLComponents componentsWithString:@"https://ipinfo.io"];
+	if (comp == nil) return;
+	comp.path = [NSString stringWithFormat:@"/%@/json", ip];
+	NSURL *url = comp.URL;
+	if (url == nil) return;
+	[[[NSURLSession sharedSession] dataTaskWithURL:url
+	      completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+		if (error != nil || data == nil) return;
+		// The IP may have changed (or the cache been cleared) while this was in flight;
+		// drop a stale lookup so we don't tag the wrong address.
+		if (![publicIP[slot] isEqualToString:ip]) return;
+		NSDictionary *info = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+		if (![info isKindOfClass:[NSDictionary class]]) return;
+		NSString *country = info[@"country"];
+		NSString *region  = info[@"region"];
+		BOOL hasC = [country isKindOfClass:[NSString class]] && [country length] > 0;
+		BOOL hasR = [region  isKindOfClass:[NSString class]] && [region  length] > 0;
+		NSString *geo = @"";
+		if (hasC && hasR) geo = [NSString stringWithFormat:@"(%@/%@)", country, region];
+		else if (hasC)    geo = [NSString stringWithFormat:@"(%@)", country];
+		else if (hasR)    geo = [NSString stringWithFormat:@"(%@)", region];
+		if (![publicIPGeo[slot] isEqualToString:geo]) {
+			publicIPGeo[slot] = geo;
+			forceUpdate();
+		}
+	  }] resume];
+}
 
 
 %hook STTelephonyStateProvider
@@ -83,7 +135,7 @@ static NSString *publicIPURL = @"https://ipv4.icanhazip.com/"; // scratch (paged
 	%orig;
 	if (enabled) {
 		Debug([NSString stringWithFormat:@"STTelephonyStateProvider currentDataSimChanged: '%@'", arg1]);
-		publicIP = @"";
+		ClearPublicIPCache();
 		forceUpdate();
 	}
 }
@@ -91,7 +143,7 @@ static NSString *publicIPURL = @"https://ipv4.icanhazip.com/"; // scratch (paged
 	%orig;
 	if (enabled) {
 		Debug([NSString stringWithFormat:@"STTelephonyStateProvider simStatusDidChange: '%@' - '%@'", arg1, arg2]);
-		publicIP = @"";
+		ClearPublicIPCache();
 		forceUpdate();
 	}
 }
@@ -114,7 +166,7 @@ static NSString *publicIPURL = @"https://ipv4.icanhazip.com/"; // scratch (paged
 	if (enabled && bLastVPN!=bRes) {
 		Debug([NSString stringWithFormat:@"SBTelephonyManager isUsingVPNConnection: %@", bRes ? @"YES" : @"NO"]);
 		bLastVPN = bRes;
-		publicIP=@"";
+		ClearPublicIPCache();
 		forceUpdate();
 	}
 	return bRes;
@@ -126,7 +178,7 @@ static NSString *publicIPURL = @"https://ipv4.icanhazip.com/"; // scratch (paged
 	%orig;
 	if (enabled) {
 		Debug(@"SBWiFiManager _updateCurrentNetwork:");
-		publicIP=@"";
+		ClearPublicIPCache();
 		forceUpdate();
 	}
 }
@@ -138,7 +190,7 @@ static NSString *publicIPURL = @"https://ipv4.icanhazip.com/"; // scratch (paged
 	%orig;
 	if (enabled) {
 		Debug(@"NEVPNConnection setSession");
-		publicIP = @"";
+		ClearPublicIPCache();
 		forceUpdate();
 	}
 }
@@ -347,6 +399,7 @@ static inline NSString *SanitizeForStatusBar(NSString *s) {
 
 static inline NSString *GetCarrierTextForSlot(int slot, id original) {
 	if (slot != 1 && slot != 2) return original;
+	gActiveSlot         = slot;
 	enableSSID          = gEnableSSID[slot];
 	enableIPADDR        = gEnableIPADDR[slot];
 	enableExtIP         = gEnableExtIP[slot];
@@ -440,11 +493,12 @@ static inline void forceUpdate() {
 //}
 
 // Fetch the public IP (once), gated on the configured host being reachable.
-static inline void MaybeFetchPublicIP()
+static inline void MaybeFetchPublicIP(int slot)
 {
-	if (bIsGettingIP || !IsEmpty(publicIP))
+	if (slot != 1 && slot != 2) return;
+	if (bIsGettingIP[slot] || !IsEmpty(publicIP[slot]))
 		return;
-	bIsGettingIP = YES;
+	bIsGettingIP[slot] = YES;
 	NSString *host = [[NSURL URLWithString:publicIPURL] host];
 	if (IsEmpty(host))
 		host = @"ipv4.icanhazip.com";
@@ -454,12 +508,12 @@ static inline void MaybeFetchPublicIP()
 		bool success = SCNetworkReachabilityGetFlags(reachability, &flags);
 		BOOL bAvailable = (success && (flags & kSCNetworkFlagsReachable));
 		if (bAvailable)
-			GetPublicIP();
+			GetPublicIP(slot);
 		else
-			bIsGettingIP = NO;
+			bIsGettingIP[slot] = NO;
 		CFRelease(reachability);
 	} else {
-		bIsGettingIP = NO;
+		bIsGettingIP[slot] = NO;
 	}
 }
 
@@ -468,10 +522,9 @@ static inline NSString *GetNetworkNameOrIP()
 	SBWiFiManager *manager = [%c(SBWiFiManager) sharedInstance];
 	NSString *networkName = [manager currentNetworkName];
 
-	// NOTE: do not clear `publicIP` here. It is a shared cache and both SIMs are
-	// rendered per forceUpdate; a SIM that isn't showing Public IP must not wipe the
-	// cache the other SIM needs. The cache is invalidated by the network/SIM/VPN/prefs
-	// change handlers instead.
+	// NOTE: do not clear publicIP[gActiveSlot] here. The cache is per-slot but it must
+	// not be wiped on every render (forceUpdate replays both SIMs); it is invalidated
+	// only by the network/SIM/VPN/prefs change handlers via ClearPublicIPCache().
 	switch (eCurrentState) {
 		case STATE_ORIGINAL:
 			return originalName;
@@ -487,11 +540,11 @@ static inline NSString *GetNetworkNameOrIP()
 
 		case STATE_PUBLICIP: {
 			// Gesture-selected: always show the public IP regardless of the toggles.
-			MaybeFetchPublicIP();
+			MaybeFetchPublicIP(gActiveSlot);
 			NSString *ip = GetIPAddress();
-			if (IsEmpty(publicIP))
+			if (IsEmpty(publicIP[gActiveSlot]))
 				return IsEmpty(ip) ? networkName : [NSString stringWithFormat:@"🔍 %@", ip];
-			return publicIP;
+			return PublicIPWithGeo(gActiveSlot);
 		}
 
 		case STATE_DISABLED:
@@ -499,11 +552,11 @@ static inline NSString *GetNetworkNameOrIP()
 			// Automatic display (no gesture active), governed by the toggles.
 			if (enableIPADDR) {
 				if (enableExtIP) {
-					MaybeFetchPublicIP();
+					MaybeFetchPublicIP(gActiveSlot);
 					NSString *ip = GetIPAddress();
-					if (IsEmpty(publicIP))
+					if (IsEmpty(publicIP[gActiveSlot]))
 						return IsEmpty(ip) ? networkName : [NSString stringWithFormat:@"🔍 %@", ip];
-					return publicIP;
+					return PublicIPWithGeo(gActiveSlot);
 				}
 				return GetIPAddress();
 			}
@@ -533,12 +586,13 @@ static inline NSString *GetIPAddress()
 	return result;
 }
 
-static inline void GetPublicIP()
+static inline void GetPublicIP(int slot)
 {
+	if (slot != 1 && slot != 2) return;
 	NSURL *url = [NSURL URLWithString:publicIPURL];
 	if (url == nil) {
-		publicIP = @"";
-		bIsGettingIP = NO;
+		publicIP[slot] = @"";
+		bIsGettingIP[slot] = NO;
 		return;
 	}
 	NSURLSession *session = [NSURLSession sharedSession];
@@ -551,13 +605,16 @@ static inline void GetPublicIP()
 				NSString *result = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
 				if (!IsEmpty(result))
 					result = [result stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]]; // trim trailing newline/space
-				publicIP = result;
+				publicIP[slot] = result;
+				publicIPGeo[slot] = @"";          // clear stale geo; FetchGeoForSlot refills it
 				forceUpdate();
-				bIsGettingIP = NO;
+				FetchGeoForSlot(slot, result);    // second hop: resolve country/region
+				bIsGettingIP[slot] = NO;
 			}
 			else {
-				publicIP = @"";
-				bIsGettingIP = NO;
+				publicIP[slot] = @"";
+				publicIPGeo[slot] = @"";
+				bIsGettingIP[slot] = NO;
 			}
 	  }] resume];
 }
@@ -637,13 +694,13 @@ static void loadPrefs() {
 
 static void refreshPrefs() {
   loadPrefs();
-  publicIP = @"";
+  ClearPublicIPCache();
   forceUpdate();
 }
 
 static void refreshPrefs2() {
   loadPrefs();
-  publicIP = @"";
+  ClearPublicIPCache();
   gState[1] = STATE_DISABLED;   // back to toggle-driven for both SIMs
   gState[2] = STATE_DISABLED;
   forceUpdate();

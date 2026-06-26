@@ -144,6 +144,17 @@
 			</array>
 			<key>PostNotification</key> 		<string>com.highrez.wificarrier/prefsupdated</string>
 		</dict>
+		<dict>
+			<key>cell</key>						<string>PSEditTextCell</string>
+			<key>id</key>						<string>ipinfoToken</string>
+			<key>defaults</key>					<string>com.highrez.wificarrier</string>
+			<key>key</key>						<string>ipinfoToken</string>
+			<key>label</key>					<string>IPInfo Token:</string>
+			<key>placeholder</key>				<string>Optional — ipinfo.io token</string>
+			<key>default</key>					<string></string>
+			<key>noAutoCorrect</key>			<true/>
+			<key>PostNotification</key> 		<string>com.highrez.wificarrier/prefsupdated</string>
+		</dict>
 
 		<dict>
 			<key>cell</key> 					<string>PSGroupCell</string>

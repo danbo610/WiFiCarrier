@@ -18,6 +18,8 @@
 "None" = "不显示";
 "Country/Region" = "国家/地区";
 "Country Only" = "仅国家";
+"IPInfo Token:" = "IPInfo Token：";
+"Optional — ipinfo.io token" = "可选 — ipinfo.io token";
 "Custom Carrier" = "自定义运营商";
 "With custom carrier text enabled, leave this empty to hide the carrier text." = "启用自定义运营商文字后，留空可隐藏状态栏运营商文字。";
 "Custom Carrier Text" = "自定义运营商文字";

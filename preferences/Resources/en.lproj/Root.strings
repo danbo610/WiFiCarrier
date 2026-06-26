@@ -18,6 +18,8 @@
 "None" = "None";
 "Country/Region" = "Country/Region";
 "Country Only" = "Country Only";
+"IPInfo Token:" = "IPInfo Token:";
+"Optional — ipinfo.io token" = "Optional — ipinfo.io token";
 "Custom Carrier" = "Custom Carrier";
 "With custom carrier text enabled, leave this empty to hide the carrier text." = "With custom carrier text enabled, leave this empty to hide the carrier text.";
 "Custom Carrier Text" = "Custom Carrier Text";

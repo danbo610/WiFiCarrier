@@ -60,7 +60,96 @@ static NSString *customWiFiCalling1 = @"";
 static NSString *customWiFiCalling2 = @"";
 static NSString *gestureType = @"both";                  // longpress | doubletap | both
 static NSString *publicIPURL = @"https://ipv4.icanhazip.com/"; // scratch (paged-in per slot)
+static NSString *gIpinfoToken = @"";                    // global ipinfo.io API token (optional)
 static int gActiveSlot = 1;   // scratch: which slot GetCarrierText/GetNetworkNameOrIP renders now
+
+static const NSTimeInterval kGeoCacheTTL = 30 * 60;      // 30 minutes
+static NSMutableDictionary *gGeoCacheByIP;              // ip -> {country, region, cachedAt}
+static NSMutableSet *gGeoFetchInFlight;                  // IPs with an active ipinfo request
+
+static inline void InitGeoCache() {
+	static dispatch_once_t once;
+	dispatch_once(&once, ^{
+		gGeoCacheByIP = [[NSMutableDictionary alloc] init];
+		gGeoFetchInFlight = [[NSMutableSet alloc] init];
+	});
+}
+
+// Redact token=… in logged URLs.
+static inline NSString *GeoURLForLog(NSURL *url) {
+	if (url == nil) return @"(nil)";
+	NSString *s = [url absoluteString];
+	NSRange token = [s rangeOfString:@"token="];
+	if (token.location == NSNotFound) return s;
+	NSRange q = [s rangeOfString:@"?"];
+	if (q.location == NSNotFound) return s;
+	return [[s substringToIndex:q.location] stringByAppendingString:@"?token=***"];
+}
+
+static inline void ClearGeoCache() {
+	InitGeoCache();
+	[gGeoCacheByIP removeAllObjects];
+	@synchronized (gGeoFetchInFlight) {
+		[gGeoFetchInFlight removeAllObjects];
+	}
+	Debug(@"GeoCache: cleared all entries");
+}
+
+// Drop geo cache entries older than kGeoCacheTTL.
+static inline void PurgeExpiredGeoCache() {
+	InitGeoCache();
+	NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
+	for (NSString *ip in [[gGeoCacheByIP allKeys] copy]) {
+		NSDictionary *entry = gGeoCacheByIP[ip];
+		NSTimeInterval cachedAt = [entry[@"cachedAt"] doubleValue];
+		if (now - cachedAt >= kGeoCacheTTL) {
+			[gGeoCacheByIP removeObjectForKey:ip];
+			Debug([NSString stringWithFormat:@"GeoCache: expired ip=%@", ip]);
+		}
+	}
+}
+
+static inline BOOL ApplyGeoToSlot(int slot, NSString *country, NSString *region) {
+	if (slot != 1 && slot != 2) return NO;
+	NSString *c = country ?: @"";
+	NSString *r = region ?: @"";
+	if ([publicIPGeoCountry[slot] isEqualToString:c] && [publicIPGeoRegion[slot] isEqualToString:r])
+		return NO;
+	publicIPGeoCountry[slot] = c;
+	publicIPGeoRegion[slot] = r;
+	return YES;
+}
+
+// Write geo onto every slot that is showing this public IP and wants a location suffix.
+static inline void ApplyGeoForIP(NSString *ip, NSString *country, NSString *region) {
+	BOOL any = NO;
+	for (int s = 1; s <= 2; s++) {
+		NSString *mode = gIpGeoMode[s] ?: @"country_region";
+		if ([mode isEqualToString:@"none"]) continue;
+		if (![publicIP[s] isEqualToString:ip]) continue;
+		if (ApplyGeoToSlot(s, country, region)) any = YES;
+	}
+	if (any) forceUpdate();
+}
+
+static inline void StoreGeoCache(NSString *ip, NSString *country, NSString *region) {
+	InitGeoCache();
+	gGeoCacheByIP[ip] = @{
+		@"country": country ?: @"",
+		@"region": region ?: @"",
+		@"cachedAt": @([[NSDate date] timeIntervalSince1970])
+	};
+	Debug([NSString stringWithFormat:@"GeoCache: stored ip=%@ '%@'/'%@'", ip, country ?: @"", region ?: @""]);
+}
+
+static inline NSURL *GeoLookupURL(NSString *ip) {
+	NSURLComponents *comp = [NSURLComponents componentsWithString:@"https://ipinfo.io"];
+	if (comp == nil) return nil;
+	comp.path = [NSString stringWithFormat:@"/%@/json", ip];
+	if ([gIpinfoToken length] > 0)
+		comp.queryItems = @[[NSURLQueryItem queryItemWithName:@"token" value:gIpinfoToken]];
+	return comp.URL;
+}
 
 // Invalidate both SIMs' cached public IP. Call when the device's network/SIM/VPN/prefs
 // change: the public IP belongs to the device's current egress route, not one slot, so
@@ -68,6 +157,7 @@ static int gActiveSlot = 1;   // scratch: which slot GetCarrierText/GetNetworkNa
 static inline void ClearPublicIPCache() {
 	publicIP[1] = @"";    publicIPGeoCountry[1] = @"";    publicIPGeoRegion[1] = @"";
 	publicIP[2] = @"";    publicIPGeoCountry[2] = @"";    publicIPGeoRegion[2] = @"";
+	ClearGeoCache();
 }
 
 // Build the parenthesised geo suffix for a slot's ipGeoMode ("none" skips lookup entirely).
@@ -100,34 +190,90 @@ static inline NSString *PublicIPWithGeo(int slot) {
 	return [NSString stringWithFormat:@"%@%@", publicIP[slot], suffix];
 }
 
-// Second hop after we have the public IP: ask ipinfo.io for country/region, cache per slot,
-// then refresh. Skipped when ipGeoMode is "none". NSURLComponents handles IPv6 addresses.
+// Resolve country/region for a public IP: in-memory cache (30 min TTL) then ipinfo.io.
+// Skipped when ipGeoMode is "none". NSURLComponents handles IPv6 addresses.
 static inline void FetchGeoForSlot(int slot, NSString *ip) {
-	if ((slot != 1 && slot != 2) || IsEmpty(ip)) return;
+	if (slot != 1 && slot != 2) {
+		Debug([NSString stringWithFormat:@"FetchGeo SIM %d skip: invalid slot", slot]);
+		return;
+	}
+	if (IsEmpty(ip)) {
+		Debug([NSString stringWithFormat:@"FetchGeo SIM %d skip: empty ip", slot]);
+		return;
+	}
 	NSString *mode = gIpGeoMode[slot] ?: @"country_region";
-	if ([mode isEqualToString:@"none"]) return;
-	NSURLComponents *comp = [NSURLComponents componentsWithString:@"https://ipinfo.io"];
-	if (comp == nil) return;
-	comp.path = [NSString stringWithFormat:@"/%@/json", ip];
-	NSURL *url = comp.URL;
-	if (url == nil) return;
+	if ([mode isEqualToString:@"none"]) {
+		Debug([NSString stringWithFormat:@"FetchGeo SIM %d skip: mode=none", slot]);
+		return;
+	}
+
+	InitGeoCache();
+	PurgeExpiredGeoCache();
+
+	NSDictionary *cached = gGeoCacheByIP[ip];
+	if ([cached isKindOfClass:[NSDictionary class]]) {
+		NSTimeInterval age = [[NSDate date] timeIntervalSince1970] - [cached[@"cachedAt"] doubleValue];
+		if (age < kGeoCacheTTL) {
+			NSString *country = cached[@"country"];
+			NSString *region  = cached[@"region"];
+			Debug([NSString stringWithFormat:@"FetchGeo SIM %d cache hit ip=%@ '%@'/'%@' age=%.0fs",
+				slot, ip, country ?: @"", region ?: @"", age]);
+			ApplyGeoForIP(ip, country, region);
+			return;
+		}
+		[gGeoCacheByIP removeObjectForKey:ip];
+		Debug([NSString stringWithFormat:@"FetchGeo SIM %d cache expired ip=%@", slot, ip]);
+	}
+
+	@synchronized (gGeoFetchInFlight) {
+		if ([gGeoFetchInFlight containsObject:ip]) {
+			Debug([NSString stringWithFormat:@"FetchGeo SIM %d skip: in-flight ip=%@", slot, ip]);
+			return;
+		}
+		[gGeoFetchInFlight addObject:ip];
+	}
+
+	NSURL *url = GeoLookupURL(ip);
+	if (url == nil) {
+		@synchronized (gGeoFetchInFlight) { [gGeoFetchInFlight removeObject:ip]; }
+		Debug([NSString stringWithFormat:@"FetchGeo SIM %d fail: URL nil for ip='%@'", slot, ip]);
+		return;
+	}
+	Debug([NSString stringWithFormat:@"FetchGeo SIM %d network mode=%@ url=%@ token=%@",
+		slot, mode, GeoURLForLog(url), [gIpinfoToken length] ? @"yes" : @"no"]);
 	[[[NSURLSession sharedSession] dataTaskWithURL:url
 	      completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
-		if (error != nil || data == nil) return;
-		// The IP may have changed (or the cache been cleared) while this was in flight;
-		// drop a stale lookup so we don't tag the wrong address.
-		if (![publicIP[slot] isEqualToString:ip]) return;
+		@synchronized (gGeoFetchInFlight) { [gGeoFetchInFlight removeObject:ip]; }
+		if (error != nil) {
+			Debug([NSString stringWithFormat:@"FetchGeo SIM %d network error ip=%@: %@", slot, ip, error]);
+			return;
+		}
+		if (data == nil) {
+			Debug([NSString stringWithFormat:@"FetchGeo SIM %d network fail ip=%@: nil data", slot, ip]);
+			return;
+		}
+		NSString *body = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+		if ([response isKindOfClass:[NSHTTPURLResponse class]]) {
+			NSInteger code = [(NSHTTPURLResponse *)response statusCode];
+			if (code < 200 || code >= 300) {
+				NSString *snippet = body;
+				if ([snippet length] > 160) snippet = [[snippet substringToIndex:160] stringByAppendingString:@"…"];
+				Debug([NSString stringWithFormat:@"FetchGeo SIM %d HTTP %ld ip=%@ body='%@'", slot, (long)code, ip, snippet ?: @""]);
+				return;
+			}
+		}
 		NSDictionary *info = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
-		if (![info isKindOfClass:[NSDictionary class]]) return;
+		if (![info isKindOfClass:[NSDictionary class]]) {
+			NSString *snippet = body;
+			if ([snippet length] > 160) snippet = [[snippet substringToIndex:160] stringByAppendingString:@"…"];
+			Debug([NSString stringWithFormat:@"FetchGeo SIM %d parse fail ip=%@ body='%@'", slot, ip, snippet ?: @""]);
+			return;
+		}
 		NSString *country = [info[@"country"] isKindOfClass:[NSString class]] ? info[@"country"] : @"";
 		NSString *region  = [info[@"region"]  isKindOfClass:[NSString class]] ? info[@"region"]  : @"";
-		BOOL changed = ![publicIPGeoCountry[slot] isEqualToString:country]
-		            || ![publicIPGeoRegion[slot]  isEqualToString:region];
-		if (changed) {
-			publicIPGeoCountry[slot] = country;
-			publicIPGeoRegion[slot]  = region;
-			forceUpdate();
-		}
+		Debug([NSString stringWithFormat:@"FetchGeo SIM %d network ok ip=%@ '%@'/'%@'", slot, ip, country, region]);
+		StoreGeoCache(ip, country, region);
+		ApplyGeoForIP(ip, country, region);
 	  }] resume];
 }
 
@@ -608,36 +754,71 @@ static inline NSString *GetIPAddress()
 
 static inline void GetPublicIP(int slot)
 {
-	if (slot != 1 && slot != 2) return;
+	if (slot != 1 && slot != 2) {
+		Debug([NSString stringWithFormat:@"GetPublicIP SIM %d skip: invalid slot", slot]);
+		return;
+	}
 	NSURL *url = [NSURL URLWithString:publicIPURL];
 	if (url == nil) {
+		Debug([NSString stringWithFormat:@"GetPublicIP SIM %d fail: bad URL '%@'", slot, publicIPURL]);
 		publicIP[slot] = @"";
 		bIsGettingIP[slot] = NO;
 		return;
 	}
+	Debug([NSString stringWithFormat:@"GetPublicIP SIM %d start url=%@", slot, url]);
 	NSURLSession *session = [NSURLSession sharedSession];
 	[[session dataTaskWithURL:url
           completionHandler:^(NSData *data,
                               NSURLResponse *response,
                               NSError *error) {
 
-			if (error==nil) {
-				NSString *result = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
-				if (!IsEmpty(result))
-					result = [result stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]]; // trim trailing newline/space
-				publicIP[slot] = result;
-				publicIPGeoCountry[slot] = @"";   // clear stale geo; FetchGeoForSlot refills it
-				publicIPGeoRegion[slot] = @"";
-				forceUpdate();
-				FetchGeoForSlot(slot, result);
-				bIsGettingIP[slot] = NO;
-			}
-			else {
+			if (error != nil) {
+				Debug([NSString stringWithFormat:@"GetPublicIP SIM %d error: %@", slot, error]);
 				publicIP[slot] = @"";
 				publicIPGeoCountry[slot] = @"";
 				publicIPGeoRegion[slot] = @"";
 				bIsGettingIP[slot] = NO;
+				return;
 			}
+			if (data == nil) {
+				Debug([NSString stringWithFormat:@"GetPublicIP SIM %d fail: nil data", slot]);
+				publicIP[slot] = @"";
+				publicIPGeoCountry[slot] = @"";
+				publicIPGeoRegion[slot] = @"";
+				bIsGettingIP[slot] = NO;
+				return;
+			}
+			if ([response isKindOfClass:[NSHTTPURLResponse class]]) {
+				NSInteger code = [(NSHTTPURLResponse *)response statusCode];
+				if (code < 200 || code >= 300) {
+					NSString *body = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+					if ([body length] > 80) body = [[body substringToIndex:80] stringByAppendingString:@"…"];
+					Debug([NSString stringWithFormat:@"GetPublicIP SIM %d HTTP %ld body='%@'", slot, (long)code, body ?: @""]);
+					publicIP[slot] = @"";
+					publicIPGeoCountry[slot] = @"";
+					publicIPGeoRegion[slot] = @"";
+					bIsGettingIP[slot] = NO;
+					return;
+				}
+			}
+			NSString *result = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+			if (!IsEmpty(result))
+				result = [result stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+			if (IsEmpty(result)) {
+				Debug([NSString stringWithFormat:@"GetPublicIP SIM %d fail: empty body", slot]);
+				publicIP[slot] = @"";
+				publicIPGeoCountry[slot] = @"";
+				publicIPGeoRegion[slot] = @"";
+				bIsGettingIP[slot] = NO;
+				return;
+			}
+			publicIP[slot] = result;
+			publicIPGeoCountry[slot] = @"";
+			publicIPGeoRegion[slot] = @"";
+			Debug([NSString stringWithFormat:@"GetPublicIP SIM %d ok: '%@' -> FetchGeo", slot, result]);
+			forceUpdate();
+			FetchGeoForSlot(slot, result);
+			bIsGettingIP[slot] = NO;
 	  }] resume];
 }
 
@@ -689,6 +870,13 @@ static void loadPrefs() {
 	}
 	
 	enableGesture = ( [prefs objectForKey:@"enableGesture"] ? [[prefs objectForKey:@"enableGesture"] boolValue] : NO );
+	id tok = [prefs objectForKey:@"ipinfoToken"];
+	if ([tok isKindOfClass:[NSString class]]) {
+		tok = [tok stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+		gIpinfoToken = [tok length] ? tok : @"";
+	} else {
+		gIpinfoToken = @"";
+	}
 	// Per-SIM display config (keys are suffixed _1 / _2; defaults match the old globals).
 	for (int s = 1; s <= 2; s++) {
 		gEnableSSID[s]    = PrefBool(prefs, @"enableSSID", s, YES);
@@ -718,7 +906,8 @@ static void loadPrefs() {
 	} else {
 		gestureType = @"both";
 	}
-	Debug([NSString stringWithFormat: @"enabled: %@ enableGesture: %@ gestureType: %@", enabled ? @"YES" : @"NO", enableGesture ? @"YES" : @"NO", gestureType]);
+	Debug([NSString stringWithFormat: @"enabled: %@ enableGesture: %@ gestureType: %@ ipinfoToken: %@",
+		enabled ? @"YES" : @"NO", enableGesture ? @"YES" : @"NO", gestureType, [gIpinfoToken length] ? @"set" : @"none"]);
   }
   else {
 	Debug(@"Unable to load preferences!");

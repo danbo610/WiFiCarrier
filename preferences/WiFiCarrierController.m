@@ -32,7 +32,7 @@ MFMailComposeViewController *mMFComposer;
 		for (PSSpecifier *s in specifiers) {
 			// Hide Public IP sub-rows unless the active SIM's Public IP is on.
 			NSString *sid = [s propertyForKey:@"id"];
-			if (([sid isEqualToString:@"publicIPURL"] || [sid isEqualToString:@"ipGeoMode"]) && !publicIPOn) {
+			if (([sid isEqualToString:@"publicIPURL"] || [sid isEqualToString:@"ipGeoMode"] || [sid isEqualToString:@"ipinfoToken"]) && !publicIPOn) {
 				[toRemove addObject:s];
 				continue;
 			}

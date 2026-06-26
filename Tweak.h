@@ -59,10 +59,15 @@ static inline void GetPublicIP();
 
 static inline NSString *GetNetworkNameOrIP();
 static inline NSString *GetIPAddress();
+static inline void MaybeFetchPublicIP();
 static inline BOOL IsEmpty(id thing);
 static inline NSString *GetCarrierText(id original);
+static inline int SlotForContext(id ctx);
+static inline void PublishCarrierName(int slot, id name);
+static inline NSString *GetCarrierTextForSlot(int slot, id original);
 
-extern void ChangeState(UIView *host);
+extern int SlotForGesture(UIGestureRecognizer *recognizer);
+extern void ChangeStateForSlot(int slot, UIView *host);
 extern BOOL GestureAllowsLongPress();
 extern BOOL GestureAllowsDoubleTap();
 extern void Debug(id thing);

@@ -37,7 +37,7 @@ jobs:
           rm -rf packages
           make package THEOS_PACKAGE_SCHEME=rootless FINALPACKAGE=1
           mkdir -p out
-          cp packages/*.deb out/WiFiCarrier_1.0.7_rootless.deb
+          cp packages/*.deb out/WiFiCarrier_1.1.10_rootless.deb
 
       - name: Build roothide .deb (roothide Theos)
         run: |
@@ -46,7 +46,7 @@ jobs:
           rm -rf packages
           make package THEOS_PACKAGE_SCHEME=roothide FINALPACKAGE=1
           mkdir -p out
-          cp packages/*.deb out/WiFiCarrier_1.0.7_roothide.deb
+          cp packages/*.deb out/WiFiCarrier_1.1.10_roothide.deb
 
       - name: Upload both .deb artifacts
         uses: actions/upload-artifact@v4

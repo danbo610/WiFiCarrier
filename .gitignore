@@ -2,5 +2,6 @@
 obj/
 /packages
 out/
+docs/
 *.deb
 .DS_Store

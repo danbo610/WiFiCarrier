@@ -48,8 +48,37 @@
 			</array>
 			<key>PostNotification</key> 		<string>com.highrez.wificarrier/prefsupdated</string>
 		</dict>
+
+		<dict>
+			<key>cell</key> 					<string>PSGroupCell</string>
+			<key>label</key> 					<string>Per-SIM Display</string>
+		</dict>
+		<dict>
+			<key>cell</key>						<string>PSSegmentCell</string>
+			<key>defaults</key>					<string>com.highrez.wificarrier</string>
+			<key>key</key>						<string>activeSIMTab</string>
+			<key>default</key>					<string>1</string>
+			<key>validValues</key>
+			<array>
+				<string>1</string>
+				<string>2</string>
+			</array>
+			<key>validTitles</key>
+			<array>
+				<string>SIM 1</string>
+				<string>SIM 2</string>
+			</array>
+		</dict>
+		<dict>
+			<key>cell</key> 					<string>PSGroupCell</string>
+			<key>id</key>						<string>carrierHeader</string>
+			<key>label</key> 					<string>SIM 1</string>
+			<key>footerText</key>				<string>Each SIM is configured independently — switch with the tab above. The status-bar gesture (left half = SIM 1, right half = SIM 2) cycles WiFi SSID → Public IP → Internal IP → Carrier for that SIM.</string>
+			<key>footerAlignment</key> 			<string>0</string>
+		</dict>
 		<dict>
 			<key>cell</key>						<string>PSSwitchCell</string>
+			<key>perSIM</key>					<true/>
 			<key>default</key>					<true/>
 			<key>defaults</key>					<string>com.highrez.wificarrier</string>
 			<key>key</key>						<string>enableSSID</string>
@@ -58,6 +87,7 @@
 		</dict>
 		<dict>
 			<key>cell</key>						<string>PSSwitchCell</string>
+			<key>perSIM</key>					<true/>
 			<key>default</key>					<false/>
 			<key>defaults</key>					<string>com.highrez.wificarrier</string>
 			<key>key</key>						<string>enableIPADDR</string>
@@ -66,6 +96,7 @@
 		</dict>
 		<dict>
 			<key>cell</key>						<string>PSSwitchCell</string>
+			<key>perSIM</key>					<true/>
 			<key>default</key>					<true/>
 			<key>defaults</key>					<string>com.highrez.wificarrier</string>
 			<key>key</key>						<string>enableExtIP</string>
@@ -74,10 +105,11 @@
 		</dict>
 		<dict>
 			<key>cell</key>						<string>PSEditTextCell</string>
+			<key>perSIM</key>					<true/>
 			<key>id</key>						<string>publicIPURL</string>
-			<key>default</key>					<string>https://icanhazip.com/</string>
+			<key>default</key>					<string>https://ipv4.icanhazip.com/</string>
 			<key>defaults</key>					<string>com.highrez.wificarrier</string>
-			<key>placeholder</key>				<string>https://icanhazip.com/</string>
+			<key>placeholder</key>				<string>https://ipv4.icanhazip.com/</string>
 			<key>noAutoCorrect</key>			<true/>
 			<key>key</key>						<string>publicIPURL</string>
 			<key>label</key>					<string>URL:</string>
@@ -92,14 +124,16 @@
 		</dict>
 		<dict>
 			<key>cell</key>						<string>PSSwitchCell</string>
+			<key>perSIM</key>					<true/>
 			<key>default</key>					<false/>
 			<key>defaults</key>					<string>com.highrez.wificarrier</string>
 			<key>key</key>						<string>enableCustomCarrier</string>
 			<key>label</key>					<string>Enable</string>
 			<key>PostNotification</key> 		<string>com.highrez.wificarrier/prefsupdated</string>
-		</dict>		
+		</dict>
 		<dict>
 			<key>cell</key> 					<string>PSEditTextCell</string>
+			<key>perSIM</key>					<true/>
 			<key>default</key> 					<string></string>
 			<key>defaults</key> 				<string>com.highrez.wificarrier</string>
 			<key>placeholder</key> 				<string>Custom Carrier Text</string>
@@ -108,7 +142,7 @@
 			<key>label</key> 					<string></string>
 			<key>PostNotification</key> 		<string>com.highrez.wificarrier/prefsupdated</string>
 		</dict>
-		
+
 		<dict>
 			<key>cell</key> 					<string>PSGroupCell</string>
 			<key>label</key> 					<string>Wifi Calling</string>
@@ -117,14 +151,16 @@
 		</dict>
 		<dict>
 			<key>cell</key>						<string>PSSwitchCell</string>
+			<key>perSIM</key>					<true/>
 			<key>default</key>					<true/>
 			<key>defaults</key>					<string>com.highrez.wificarrier</string>
 			<key>key</key>						<string>detectWFC</string>
 			<key>label</key>					<string>Detect WiFi Calling</string>
 			<key>PostNotification</key> 		<string>com.highrez.wificarrier/prefsupdated</string>
-		</dict>		
+		</dict>
 		<dict>
 			<key>cell</key> 					<string>PSEditTextCell</string>
+			<key>perSIM</key>					<true/>
 			<key>default</key> 					<string>WiFi Call</string>
 			<key>defaults</key> 				<string>com.highrez.wificarrier</string>
 			<key>placeholder</key> 				<string>Detect WiFi Calling</string>
@@ -133,9 +169,10 @@
 			<key>label</key> 					<string>Carrier WFC:</string>
 			<key>PostNotification</key> 		<string>com.highrez.wificarrier/prefsupdated</string>
 		</dict>
-		
+
 		<dict>
 			<key>cell</key> 					<string>PSEditTextCell</string>
+			<key>perSIM</key>					<true/>
 			<key>default</key> 					<string>WFC</string>
 			<key>defaults</key> 				<string>com.highrez.wificarrier</string>
 			<key>placeholder</key> 				<string>Append to SSID</string>
@@ -144,9 +181,10 @@
 			<key>label</key> 					<string>Add to SSID:</string>
 			<key>PostNotification</key> 		<string>com.highrez.wificarrier/prefsupdated</string>
 		</dict>
-		
+
 		<dict>
 			<key>cell</key> 					<string>PSEditTextCell</string>
+			<key>perSIM</key>					<true/>
 			<key>default</key> 					<string>WiFi Call</string>
 			<key>defaults</key> 				<string>com.highrez.wificarrier</string>
 			<key>placeholder</key> 				<string>Append to custom carrier</string>

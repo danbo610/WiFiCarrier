@@ -13,24 +13,58 @@ MFMailComposeViewController *mMFComposer;
 - (NSArray *)specifiers {
 	if (!_specifiers) {
 		NSMutableArray *specifiers = [[self loadSpecifiersFromPlistName:@"Root" target:self] mutableCopy];
-		// Only show the Public IP URL field when Public IP is enabled.
-		if (![self publicIPEnabled]) {
-			PSSpecifier *urlSpec = nil;
-			for (PSSpecifier *s in specifiers) {
-				if ([[s propertyForKey:@"id"] isEqualToString:@"publicIPURL"]) { urlSpec = s; break; }
+		NSString *activeSIM = [self activeSIMTab];   // "1" or "2"
+		BOOL publicIPOn = [self publicIPEnabled];
+		NSMutableArray *toRemove = [NSMutableArray array];
+		for (PSSpecifier *s in specifiers) {
+			// Hide the (per-SIM) Public IP URL row unless the active SIM's Public IP is on.
+			if ([[s propertyForKey:@"id"] isEqualToString:@"publicIPURL"] && !publicIPOn) {
+				[toRemove addObject:s];
+				continue;
 			}
-			if (urlSpec) [specifiers removeObject:urlSpec];
+			// Bind per-SIM rows to the active SIM's suffixed key (enableSSID -> enableSSID_1).
+			if ([[s propertyForKey:@"perSIM"] boolValue]) {
+				NSString *base = [s propertyForKey:@"key"];
+				if (base) [s setProperty:[NSString stringWithFormat:@"%@_%@", base, activeSIM] forKey:@"key"];
+			}
 		}
+		[specifiers removeObjectsInArray:toRemove];
+		[self applyCarrierHeaderTo:specifiers];
 		_specifiers = specifiers;
 	}
 
 	return _specifiers;
 }
 
+// Show the active SIM's carrier name (published by the tweak) as the section header
+// right above "Use WiFi SSID", e.g. "SIM 1 · 中国移动". Falls back to "SIM 1"/"SIM 2".
+- (void)applyCarrierHeaderTo:(NSArray *)specifiers {
+	NSDictionary *carriers = [NSDictionary dictionaryWithContentsOfFile:@"/var/mobile/Library/Preferences/com.highrez.wificarrier.carriers.plist"];
+	NSString *active = [self activeSIMTab];
+	NSString *name = carriers[active];
+	NSString *label = ([name isKindOfClass:[NSString class]] && [name length])
+		? [NSString stringWithFormat:@"SIM %@ · %@", active, name]
+		: [NSString stringWithFormat:@"SIM %@", active];
+	for (PSSpecifier *s in specifiers) {
+		if ([[s propertyForKey:@"id"] isEqualToString:@"carrierHeader"]) {
+			[s setName:label];
+			break;
+		}
+	}
+}
+
+- (NSDictionary *)currentSettings {
+	return [NSDictionary dictionaryWithContentsOfFile:@"/var/mobile/Library/Preferences/com.highrez.wificarrier.plist"];
+}
+
 - (BOOL)publicIPEnabled {
-	NSDictionary *settings = [NSDictionary dictionaryWithContentsOfFile:@"/var/mobile/Library/Preferences/com.highrez.wificarrier.plist"];
-	id value = settings[@"enableExtIP"];
+	id value = [self currentSettings][[NSString stringWithFormat:@"enableExtIP_%@", [self activeSIMTab]]];
 	return value ? [value boolValue] : YES;
+}
+
+- (NSString *)activeSIMTab {
+	id value = [self currentSettings][@"activeSIMTab"];
+	return [value isKindOfClass:[NSString class]] ? value : @"1";
 }
 
 - (id)readPreferenceValue:(PSSpecifier*)specifier {
@@ -46,10 +80,11 @@ MFMailComposeViewController *mMFComposer;
 	[settings setObject:value forKey:specifier.properties[@"key"]];
 	[settings writeToFile:path atomically:YES];
 
-	// Show/hide the Public IP URL field when the Public IP switch is toggled.
-	// A full reload (vs. animated insert/remove) rebuilds the banner cell cleanly,
-	// avoiding the stale-layout glitch on the header.
-	if ([specifier.properties[@"key"] isEqualToString:@"enableExtIP"]) {
+	// Rebuild the list (full reload, avoids the banner stale-layout glitch) when a
+	// control that changes which rows are shown is toggled: the Public IP switch
+	// (URL field) or the SIM tab (which SIM's fields are shown).
+	NSString *key = specifier.properties[@"key"];
+	if ([key hasPrefix:@"enableExtIP"] || [key isEqualToString:@"activeSIMTab"]) {
 		[_specifiers release];
 		_specifiers = nil;
 		[self reloadSpecifiers];

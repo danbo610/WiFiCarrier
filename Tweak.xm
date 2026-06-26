@@ -21,6 +21,25 @@ static NSString *publicIP = @"";
 static id subscriptionContext = nil;
 static eState eCurrentState = STATE_DISABLED;
 
+// Per-slot capture (dual-SIM): each slot's last context + name.
+static id subscriptionContext1 = nil;   // SIM 1
+static id subscriptionContext2 = nil;   // SIM 2
+static NSString *originalName1 = @"";
+static NSString *originalName2 = @"";
+
+// Per-slot configuration (index 1 = SIM 1, 2 = SIM 2). loadPrefs fills these from the
+// per-SIM preference keys (e.g. enableSSID_1 / enableSSID_2); GetCarrierTextForSlot
+// "pages" the chosen slot's config into the working globals and reuses GetCarrierText.
+static BOOL gEnableSSID[3], gEnableIPADDR[3], gEnableExtIP[3], gEnableCustom[3], gEnableWFC[3];
+static NSString *gCustomCarrier[3], *gSrcWFC[3], *gWFC1[3], *gWFC2[3], *gPublicIPURL[3];
+static eState gState[3];   // per-slot gesture cycle position (STATE_DISABLED = follow toggles)
+static NSString *gLastPublished[3];   // last carrier name written to the carriers file
+
+// Last status-bar touch location, captured in hitTest: — a UITapGestureRecognizer's
+// locationInView: returns 0 once the taps lift, so we can't rely on it for left/right.
+static CGFloat gLastTouchX = -1.0;
+static CGFloat gLastTouchW = 0.0;
+
 //Reachability
 //static SCNetworkReachabilityRef reachability;
 
@@ -38,19 +57,26 @@ static NSString *srcWiFiCalling = @"";
 static NSString *customWiFiCalling1 = @"";
 static NSString *customWiFiCalling2 = @"";
 static NSString *gestureType = @"both";                  // longpress | doubletap | both
-static NSString *publicIPURL = @"https://icanhazip.com/";
+static NSString *publicIPURL = @"https://ipv4.icanhazip.com/"; // scratch (paged-in per slot)
 
 
 %hook STTelephonyStateProvider
 //The following is for IOS 13 support.
 -(void)operatorNameChanged:(id)arg1 name:(id)arg2 {
+	int slot = SlotForContext(arg1);
+	if (slot == 1)      { subscriptionContext1 = arg1; originalName1 = arg2; }
+	else if (slot == 2) { subscriptionContext2 = arg1; originalName2 = arg2; }
 	subscriptionContext = arg1;
 	originalName = arg2;
+	PublishCarrierName(slot, arg2);
+
+	Debug([NSString stringWithFormat:@"operatorNameChanged slot=%d name='%@'", slot, arg2]);
+
 	if (!enabled || !hasFullyLoaded) {
 		%orig;
 		return;
 	}
-	%orig(arg1, GetCarrierText(arg2));
+	%orig(arg1, GetCarrierTextForSlot(slot, arg2));
 }
 
 -(void)currentDataSimChanged:(id)arg1 {
@@ -129,6 +155,14 @@ static NSString *publicIPURL = @"https://icanhazip.com/";
 %end
 
 %hook UIStatusBarWindow
+- (UIView *)hitTest:(CGPoint)point withEvent:(UIEvent *)event {
+	if (event != nil) {   // a real touch — remember where it landed for the gesture handlers
+		gLastTouchX = point.x;
+		gLastTouchW = self.bounds.size.width;
+	}
+	return %orig;
+}
+
 - (id)initWithFrame:(CGRect)frame {
     self = %orig;
 		[self addGestureRecognizer:[[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(handleGestureFrom:)]];
@@ -140,13 +174,13 @@ static NSString *publicIPURL = @"https://icanhazip.com/";
 
 %new -(void)handleGestureFrom:(UILongPressGestureRecognizer *)recognizer {
 	if (enableGesture && GestureAllowsLongPress() && recognizer.state == UIGestureRecognizerStateBegan) {
-		ChangeState(recognizer.view);
+		ChangeStateForSlot(SlotForGesture(recognizer), recognizer.view);
 	}
 }
 
 %new -(void)handleDoubleTapFrom:(UITapGestureRecognizer *)recognizer {
 	if (enableGesture && GestureAllowsDoubleTap() && recognizer.state == UIGestureRecognizerStateRecognized) {
-		ChangeState(recognizer.view);
+		ChangeStateForSlot(SlotForGesture(recognizer), recognizer.view);
 	}
 }
 %end
@@ -181,8 +215,7 @@ static inline void PlayHaptic() {
 
 // Brief toast naming the mode we just switched to. Hosted in its own window on the
 // gesture view's scene so it shows over whatever is on screen (home screen or in-app).
-static inline void ShowModeHUD(eState s, UIView *anchor) {
-	NSString *text = StateName(s);
+static inline void ShowModeHUD(NSString *text, UIView *anchor) {
 	dispatch_async(dispatch_get_main_queue(), ^{
 		UIWindowScene *scene = nil;
 		UIWindow *anchorWindow = [anchor isKindOfClass:[UIWindow class]] ? (UIWindow *)anchor : anchor.window;
@@ -232,33 +265,102 @@ static inline void ShowModeHUD(eState s, UIView *anchor) {
 	});
 }
 
-void ChangeState(UIView *host) {
-	if (!hasFullyLoaded) return;
-	if (!enableGesture) return;
-	if (!enabled) {
-		eCurrentState = STATE_DISABLED;
-		return;
+// Left half of the status bar = SIM 1 (主卡), right half = SIM 2 (副卡).
+int SlotForGesture(UIGestureRecognizer *recognizer) {
+	// Prefer the touch X captured in hitTest: (reliable for both long-press and the
+	// double-tap, whose own locationInView: reads 0 after the taps lift). Fall back
+	// to the recognizer's own location if no touch was captured.
+	CGFloat x = gLastTouchX, w = gLastTouchW;
+	if (x < 0 || w <= 0) {
+		UIView *v = recognizer.view;
+		x = [recognizer locationInView:v].x;
+		w = v.bounds.size.width;
 	}
+	int slot = (w > 0 && x >= w / 2.0) ? 2 : 1;
+	Debug([NSString stringWithFormat:@"SlotForGesture %@ x=%.1f w=%.1f -> SIM %d", [recognizer class], x, w, slot]);
+	return slot;
+}
 
-	eState eStartState = eCurrentState;
+// Advance one SIM one step along the cycle, starting from its CURRENT position
+// (state is tracked per slot and persists, so this never resets to the start):
+//   WiFi SSID -> Public IP -> Internal IP -> Carrier(original) -> back to SSID.
+void ChangeStateForSlot(int slot, UIView *host) {
+	if (!hasFullyLoaded || !enableGesture || !enabled) return;
+	if (slot != 1 && slot != 2) return;
 
-	// Fixed cycle, independent of the display-option toggles (Use IP Address etc.):
-	// WiFi SSID -> Public IP -> Internal IP -> Carrier (original) -> back to SSID
-	switch (eCurrentState) {
-		case STATE_SSID:       eCurrentState = STATE_PUBLICIP;   break;
-		case STATE_PUBLICIP:   eCurrentState = STATE_INTERNALIP; break;
-		case STATE_INTERNALIP: eCurrentState = STATE_ORIGINAL;   break;
-		case STATE_ORIGINAL:   eCurrentState = STATE_SSID;       break;
-		default:               eCurrentState = STATE_SSID;       break; // from Auto / Custom Carrier
+	eState start = gState[slot];
+	eState next;
+	switch (start) {
+		case STATE_SSID:       next = STATE_PUBLICIP;   break;
+		case STATE_PUBLICIP:   next = STATE_INTERNALIP; break;
+		case STATE_INTERNALIP: next = STATE_ORIGINAL;   break;
+		case STATE_ORIGINAL:   next = STATE_SSID;       break;
+		default:               next = STATE_SSID;       break; // from toggle-driven -> enter at SSID
 	}
+	gState[slot] = next;
 
-	Debug([NSString stringWithFormat:@"ChangeState from '%@' to '%@'", StateName(eStartState), StateName(eCurrentState)]);
+	Debug([NSString stringWithFormat:@"ChangeState SIM %d from '%@' to '%@'", slot, StateName(start), StateName(next)]);
 
-	if (eCurrentState != eStartState) {
-		PlayHaptic();
-		ShowModeHUD(eCurrentState, host);
-		forceUpdate();
-	}
+	PlayHaptic();
+	ShowModeHUD([NSString stringWithFormat:@"SIM %d: %@", slot, StateName(next)], host);
+	forceUpdate();
+}
+
+// Which physical SIM slot does this call belong to? (1, 2, or 0=unknown)
+// arg1 is a CTXPCServiceSubscriptionContext whose description carries
+// slotID=CTSubscriptionSlotOne / CTSubscriptionSlotTwo — the authoritative,
+// stable per-slot identifier (verified on-device).
+static inline int SlotForContext(id ctx) {
+	if (ctx == nil) return 0;
+	NSString *desc = [ctx description];
+	if (![desc isKindOfClass:[NSString class]]) return 0;
+	if ([desc rangeOfString:@"SlotOne"].location != NSNotFound) return 1;
+	if ([desc rangeOfString:@"SlotTwo"].location != NSNotFound) return 2;
+	return 0;
+}
+
+// Publish a slot's carrier name to a small file the Settings bundle reads to label
+// the SIM tabs (e.g. "SIM 1 · 中国移动"). Only written when the name actually changes.
+static inline void PublishCarrierName(int slot, id name) {
+	if ((slot != 1 && slot != 2) || ![name isKindOfClass:[NSString class]] || [name length] == 0) return;
+	if ([name isEqualToString:gLastPublished[slot]]) return;
+	gLastPublished[slot] = name;
+	NSString *path = @"/var/mobile/Library/Preferences/com.highrez.wificarrier.carriers.plist";
+	NSMutableDictionary *d = [NSMutableDictionary dictionaryWithContentsOfFile:path];
+	if (!d) d = [NSMutableDictionary dictionary];
+	d[[NSString stringWithFormat:@"%d", slot]] = name;
+	[d writeToFile:path atomically:YES];
+}
+
+// Per-slot carrier text: page the slot's saved config into the working globals and
+// reuse the existing single-display logic. eCurrentState (paged from gState[slot]):
+// STATE_DISABLED = follow the toggles; a gesture state overrides at runtime.
+
+// The status-bar carrier text silently drops any string containing ':' (verified
+// on-device — IPv4's dots and even very long text marquee-scroll fine, but a colon
+// blanks it). So replace colons with dots, e.g. a public IPv6
+// 2409:895b:…:ff72 -> 2409.895b.….ff72. No truncation — length is fine.
+static inline NSString *SanitizeForStatusBar(NSString *s) {
+	if (![s isKindOfClass:[NSString class]] || ![s containsString:@":"]) return s;
+	return [s stringByReplacingOccurrencesOfString:@":" withString:@"."];
+}
+
+static inline NSString *GetCarrierTextForSlot(int slot, id original) {
+	if (slot != 1 && slot != 2) return original;
+	enableSSID          = gEnableSSID[slot];
+	enableIPADDR        = gEnableIPADDR[slot];
+	enableExtIP         = gEnableExtIP[slot];
+	enableCustomCarrier = gEnableCustom[slot];
+	customCarrier       = gCustomCarrier[slot];
+	enableWFC           = gEnableWFC[slot];
+	srcWiFiCalling      = gSrcWFC[slot];
+	customWiFiCalling1  = gWFC1[slot];
+	customWiFiCalling2  = gWFC2[slot];
+	publicIPURL         = gPublicIPURL[slot] ?: @"https://ipv4.icanhazip.com/";
+	eCurrentState       = gState[slot];
+	NSString *result = SanitizeForStatusBar(GetCarrierText(original));
+	Debug([NSString stringWithFormat:@"slot %d set '%@'", slot, result]);   // async, light
+	return result;
 }
 
 static inline NSString *GetCarrierText(id original) {
@@ -306,25 +408,30 @@ static inline NSString *GetCarrierText(id original) {
 }
 
 static inline void forceUpdate() {
-	if (!hasFullyLoaded || subscriptionContext == nil) return;
+	if (!hasFullyLoaded) return;
 
 	SBTelephonyManager *manager = [%c(SBTelephonyManager) sharedTelephonyManager];
 	if (manager != nil)
 	{
 		if ([manager respondsToSelector:@selector(telephonyStateProvider)])
 		{
-			//Must be IOS13
+			//Must be IOS13+
 			STTelephonyStateProvider *provider = [manager telephonyStateProvider];
-			if (provider!=nil) {
-				[provider operatorNameChanged:subscriptionContext name:originalName];
-			} 
+			if (provider != nil) {
+				// Replay each captured slot so both SIMs are refreshed independently.
+				if (subscriptionContext1 != nil) [provider operatorNameChanged:subscriptionContext1 name:originalName1];
+				if (subscriptionContext2 != nil) [provider operatorNameChanged:subscriptionContext2 name:originalName2];
+				if (subscriptionContext1 == nil && subscriptionContext2 == nil && subscriptionContext != nil)
+					[provider operatorNameChanged:subscriptionContext name:originalName];
+			}
 		} else {
 			//Must be before IOS13
-			[manager operatorNameChanged:subscriptionContext name:originalName];
+			if (subscriptionContext != nil)
+				[manager operatorNameChanged:subscriptionContext name:originalName];
 		}
 	}
 	else Debug(@"Unable to grab shared open telephony manager");
-	
+
 }
 
 //static void ReachabilityCallback(SCNetworkReachabilityRef target, SCNetworkReachabilityFlags flags, void *info)
@@ -340,7 +447,7 @@ static inline void MaybeFetchPublicIP()
 	bIsGettingIP = YES;
 	NSString *host = [[NSURL URLWithString:publicIPURL] host];
 	if (IsEmpty(host))
-		host = @"icanhazip.com";
+		host = @"ipv4.icanhazip.com";
 	SCNetworkReachabilityRef reachability = SCNetworkReachabilityCreateWithName(NULL, [host UTF8String]);
 	if (reachability) {
 		SCNetworkReachabilityFlags flags;
@@ -361,21 +468,21 @@ static inline NSString *GetNetworkNameOrIP()
 	SBWiFiManager *manager = [%c(SBWiFiManager) sharedInstance];
 	NSString *networkName = [manager currentNetworkName];
 
+	// NOTE: do not clear `publicIP` here. It is a shared cache and both SIMs are
+	// rendered per forceUpdate; a SIM that isn't showing Public IP must not wipe the
+	// cache the other SIM needs. The cache is invalidated by the network/SIM/VPN/prefs
+	// change handlers instead.
 	switch (eCurrentState) {
 		case STATE_ORIGINAL:
-			publicIP = @"";
 			return originalName;
 
 		case STATE_CUSTOMCARRIER:
-			publicIP = @"";
 			return customCarrier;
 
 		case STATE_SSID:
-			publicIP = @"";
 			return networkName;
 
 		case STATE_INTERNALIP:
-			publicIP = @"";
 			return GetIPAddress();
 
 		case STATE_PUBLICIP: {
@@ -398,10 +505,8 @@ static inline NSString *GetNetworkNameOrIP()
 						return IsEmpty(ip) ? networkName : [NSString stringWithFormat:@"🔍 %@", ip];
 					return publicIP;
 				}
-				publicIP = @"";
 				return GetIPAddress();
 			}
-			publicIP = @"";
 			return networkName;
 	}
 }
@@ -467,6 +572,16 @@ static inline BOOL IsEmpty(id thing) {
 
 // ===== PREFERENCE HANDLING ===== //
 
+// Read a per-SIM key (e.g. "enableSSID" + slot -> "enableSSID_1").
+static inline BOOL PrefBool(NSDictionary *prefs, NSString *base, int slot, BOOL def) {
+	id v = [prefs objectForKey:[NSString stringWithFormat:@"%@_%d", base, slot]];
+	return v ? [v boolValue] : def;
+}
+static inline NSString *PrefStr(NSDictionary *prefs, NSString *base, int slot, NSString *def) {
+	id v = [prefs objectForKey:[NSString stringWithFormat:@"%@_%d", base, slot]];
+	return [v isKindOfClass:[NSString class]] ? (NSString *)v : def;
+}
+
 static void loadPrefs() {
   Debug(@"Load preferences");
   NSMutableDictionary *prefs = [[NSMutableDictionary alloc] initWithContentsOfFile:@"/var/mobile/Library/Preferences/com.highrez.wificarrier.plist"];
@@ -484,16 +599,22 @@ static void loadPrefs() {
 	}
 	
 	enableGesture = ( [prefs objectForKey:@"enableGesture"] ? [[prefs objectForKey:@"enableGesture"] boolValue] : NO );
-	enableSSID = ( [prefs objectForKey:@"enableSSID"] ? [[prefs objectForKey:@"enableSSID"] boolValue] : YES );
-	enableIPADDR = ( [prefs objectForKey:@"enableIPADDR"] ? [[prefs objectForKey:@"enableIPADDR"] boolValue] : NO );
-	enableExtIP = ( [prefs objectForKey:@"enableExtIP"] ? [[prefs objectForKey:@"enableExtIP"] boolValue] : YES );
-	enableCustomCarrier = ( [prefs objectForKey:@"enableCustomCarrier"] ? [[prefs objectForKey:@"enableCustomCarrier"] boolValue] : NO );
-    customCarrier = ( [prefs objectForKey:@"customCarrier"] ? [[prefs objectForKey:@"customCarrier"] stringValue] : nil );
-
-	enableWFC = ( [prefs objectForKey:@"detectWFC"] ? [[prefs objectForKey:@"detectWFC"] boolValue] : NO );
-	srcWiFiCalling = ( [prefs objectForKey:@"srcWiFiCalling"] ? [[prefs objectForKey:@"srcWiFiCalling"] stringValue] : nil );
-	customWiFiCalling1 = ( [prefs objectForKey:@"wifiCalling1"] ? [[prefs objectForKey:@"wifiCalling1"] stringValue] : nil );
-	customWiFiCalling2 = ( [prefs objectForKey:@"wifiCalling2"] ? [[prefs objectForKey:@"wifiCalling2"] stringValue] : nil );
+	// Per-SIM display config (keys are suffixed _1 / _2; defaults match the old globals).
+	for (int s = 1; s <= 2; s++) {
+		gEnableSSID[s]    = PrefBool(prefs, @"enableSSID", s, YES);
+		gEnableIPADDR[s]  = PrefBool(prefs, @"enableIPADDR", s, NO);
+		gEnableExtIP[s]   = PrefBool(prefs, @"enableExtIP", s, YES);
+		gEnableCustom[s]  = PrefBool(prefs, @"enableCustomCarrier", s, NO);
+		gEnableWFC[s]     = PrefBool(prefs, @"detectWFC", s, NO);
+		gCustomCarrier[s] = PrefStr(prefs, @"customCarrier", s, @"");
+		gSrcWFC[s]        = PrefStr(prefs, @"srcWiFiCalling", s, @"");
+		gWFC1[s]          = PrefStr(prefs, @"wifiCalling1", s, @"");
+		gWFC2[s]          = PrefStr(prefs, @"wifiCalling2", s, @"");
+		NSString *url     = PrefStr(prefs, @"publicIPURL", s, @"https://ipv4.icanhazip.com/");
+		gPublicIPURL[s]   = [url length] ? url : @"https://ipv4.icanhazip.com/";
+		Debug([NSString stringWithFormat:@"SIM %d: SSID=%d IP=%d ExtIP=%d Custom=%d('%@') WFC=%d state=%d url=%@",
+			s, gEnableSSID[s], gEnableIPADDR[s], gEnableExtIP[s], gEnableCustom[s], gCustomCarrier[s], gEnableWFC[s], (int)gState[s], gPublicIPURL[s]]);
+	}
 
 	// gestureType is stored as a string ("longpress"/"doubletap"/"both"); accept a
 	// numeric index too in case the segmented cell ever stores one.
@@ -506,21 +627,7 @@ static void loadPrefs() {
 	} else {
 		gestureType = @"both";
 	}
-	publicIPURL = ( ([prefs objectForKey:@"publicIPURL"] && [[prefs objectForKey:@"publicIPURL"] length] > 0) ? [prefs objectForKey:@"publicIPURL"] : @"https://icanhazip.com/" );
-
-	Debug([NSString stringWithFormat: @"enabled: %@", enabled ? @"YES" : @"NO"]);
-	Debug([NSString stringWithFormat: @"enableGesture: %@", enableGesture ? @"YES" : @"NO"]);
-	Debug([NSString stringWithFormat: @"enableSSID: %@", enableSSID ? @"YES" : @"NO"]);
-	Debug([NSString stringWithFormat: @"enableIPADDR: %@", enableIPADDR ? @"YES" : @"NO"]);
-	Debug([NSString stringWithFormat: @"enableExtIP: %@", enableExtIP ? @"YES" : @"NO"]);
-	Debug([NSString stringWithFormat: @"enableCustomCarrier: %@", enableCustomCarrier ? @"YES" : @"NO"]);
-	Debug([NSString stringWithFormat: @"CustomCarrierText: %@", customCarrier]);
-	Debug([NSString stringWithFormat: @"enableWFC: %@", enableWFC ? @"YES" : @"NO"]);
-	Debug([NSString stringWithFormat: @"srcWiFiCalling: %@", srcWiFiCalling]);
-	Debug([NSString stringWithFormat: @"customWiFiCalling1: %@", customWiFiCalling1]);
-	Debug([NSString stringWithFormat: @"customWiFiCalling2: %@", customWiFiCalling2]);
-	Debug([NSString stringWithFormat: @"gestureType: %@", gestureType]);
-	Debug([NSString stringWithFormat: @"publicIPURL: %@", publicIPURL]);
+	Debug([NSString stringWithFormat: @"enabled: %@ enableGesture: %@ gestureType: %@", enabled ? @"YES" : @"NO", enableGesture ? @"YES" : @"NO", gestureType]);
   }
   else {
 	Debug(@"Unable to load preferences!");
@@ -537,7 +644,8 @@ static void refreshPrefs() {
 static void refreshPrefs2() {
   loadPrefs();
   publicIP = @"";
-  eCurrentState = STATE_DISABLED;
+  gState[1] = STATE_DISABLED;   // back to toggle-driven for both SIMs
+  gState[2] = STATE_DISABLED;
   forceUpdate();
 }
 
@@ -555,28 +663,35 @@ static void initPrefs() {
 }
 
 void Debug(id thing) {
-	if (enableDebug && dateFormatter!=nil) {
-		NSString *dateString = [dateFormatter stringFromDate:[NSDate date]];
-		NSString *content = [NSString stringWithFormat:@"%@: %@\n",dateString, thing];
-		
+	if (!enableDebug || dateFormatter == nil) return;
+	NSString *dateString = [dateFormatter stringFromDate:[NSDate date]];
+	NSString *content = [NSString stringWithFormat:@"%@: %@\n", dateString, thing];
+
+	// Write off the main thread: this runs inside operatorNameChanged etc., and blocking
+	// the main thread on file I/O here starves the status bar (it dropped the 5G/signal
+	// indicator under heavy logging). A serial queue keeps lines ordered.
+	static dispatch_queue_t logQueue;
+	static dispatch_once_t onceToken;
+	dispatch_once(&onceToken, ^{
+		logQueue = dispatch_queue_create("com.highrez.wificarrier.log", DISPATCH_QUEUE_SERIAL);
+	});
+	dispatch_async(logQueue, ^{
 		NSFileHandle *fileHandle = [NSFileHandle fileHandleForWritingAtPath:_DEBUGLOG_];
-		if (fileHandle){
+		if (fileHandle) {
 			[fileHandle seekToEndOfFile];
 			[fileHandle writeData:[content dataUsingEncoding:NSUTF8StringEncoding]];
 			[fileHandle closeFile];
+		} else {
+			[content writeToFile:_DEBUGLOG_ atomically:NO encoding:NSStringEncodingConversionAllowLossy error:nil];
 		}
-		else{
-			[content writeToFile:_DEBUGLOG_
-					  atomically:NO
-						encoding:NSStringEncodingConversionAllowLossy
-						   error:nil];
-		}
-	}
+	});
 }
 
 %ctor {
 	dateFormatter = [[NSDateFormatter alloc] init];
 	[dateFormatter setDateFormat:@"yyyy-MM-dd HH:mm:ss"];
+	gState[1] = STATE_DISABLED;   // both SIMs start toggle-driven (no gesture yet)
+	gState[2] = STATE_DISABLED;
 	initPrefs();
 	loadPrefs();
 	CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), NULL, (CFNotificationCallback)refreshPrefs, CFSTR("com.highrez.wificarrier/prefsupdated"), NULL, CFNotificationSuspensionBehaviorCoalesce);
